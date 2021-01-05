@@ -1,5 +1,5 @@
-from tools import *
-from model_tools import *
+from code.tools import *
+from code.model_tools import *
 import matplotlib.pyplot as plt
 from matplotlib.pyplot import scatter
 
@@ -13,23 +13,26 @@ from matplotlib.pyplot import scatter
 if __name__ == "__main__":
     gh_path = GH_PATH(r'D:\LYJ\AutoEncoder-Based-Communication-System-master\matlab_code\genarateH G\G.mat',
                       r'D:\LYJ\AutoEncoder-Based-Communication-System-master\matlab_code\genarateH G\H.mat')
-    model_load_path = Model_save_path(r'./my_model/mlp_encoder', r'./my_model/mlp_decoder',
-                                      r'./my_model/mlp_mapping_model')
-    ofdm_model_load_path = Model_save_path(r'./my_model/mlp_ofdm_encoder', r'./my_model/mlp_ofdm_decoder',
-                                           r'./my_model/mlp_ofdm_mapping_model')
+    model_load_path = Model_save_path(r'../my_model/mlp_encoder', r'../my_model/mlp_decoder',
+                                      r'../my_model/mlp_mapper')
+    ofdm_model_load_path = Model_save_path(r'../my_model/mlp_ofdm_encoder', r'../my_model/mlp_ofdm_decoder',
+                                           r'../my_model/mlp_ofdm_mapper')
     g = load_mat(gh_path.g_path)['outputG']
     m, bit_nums, channels = 4, 10000, 2  # 注意bit_nums应该与训练的时候大小一样
     ldpc_encoder = LDPCEncode(g, m, bit_nums)
     qam_padding_bits_test = ldpc_encoder.encode(model_name='mlp')
     num_syms = qam_padding_bits_test.shape[0]
-    ofdm_model = 0
-    mapping_model, encoder, decoder = model_load(ofdm_model_load_path if ofdm_model else model_load_path)
+    ofdm_model = 1
+    encoder, decoder, mapper = model_load(ofdm_model_load_path if ofdm_model else model_load_path)
     if ofdm_model:
+        ofdm_ifft = ofdm_layer = OFDMModulation(num_syms, name='ofdm')
         ofdm_fft = OFDMDeModulation(num_syms // OFDMParameters.fft_num.value * OFDMParameters.ofdm_syms.value)
     history = {'snr': [], 'ber': []}
     for snr in range(0, 31, 2):
         channel = GaussianNoise(snr, ofdm_model=ofdm_model, num_sym=80, nbps=m, num_syms=num_syms)
-        mapping = mapping_model(qam_padding_bits_test)
+        mapping = encoder(qam_padding_bits_test)
+        if ofdm_model:
+            mapping = ofdm_ifft(mapping)
         received = channel(mapping)
         if ofdm_model:
             received = ofdm_fft(received)
