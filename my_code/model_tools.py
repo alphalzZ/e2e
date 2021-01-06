@@ -44,7 +44,7 @@ class PAPRConstraint(losses.Loss):
         ofdm_signal_iq = self.__noise_layer(self.__ofdm_layer(y_pred))
         ofdm_signal_complex = tf.complex(ofdm_signal_iq[:, 0], ofdm_signal_iq[:, 1])
         ofdm_signal = tf.reshape(ofdm_signal_complex, ofdm_shape)
-        signal_power = tf.math.real(tf.multiply(ofdm_signal, tf.math.conj(ofdm_signal)))
+        signal_power = tf.square(tf.math.real(tf.multiply(ofdm_signal, tf.math.conj(ofdm_signal))))
         mean_pow = tf.reduce_mean(signal_power, axis=0)
         max_pow = tf.reduce_max(signal_power, axis=0)
         papr_vector = 10 * tf.math.log(max_pow / mean_pow)
