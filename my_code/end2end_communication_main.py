@@ -9,7 +9,7 @@ from my_code.tools import *
 
 class Train:
     def __init__(self, data: Data, lr, m, snr, opt="adam", continued=0, trainable=True,
-                 label_transform=True, mse=False, papr_method='none', ofdm_model=0):
+                 label_transform=True, mse=False, mapping_method='none', ofdm_model=0):
         """
         损失函数用两种方法度量，binary_cross_entropy和mse以及其他基于llr的度量方法
         papr约束和mse使用自适应多任务学习方法
@@ -28,7 +28,7 @@ class Train:
             self.optimizer = keras.optimizers.Ftrl(lr=lr)
         self.prime_loss = keras.losses.MeanSquaredError() if mse \
             else keras.losses.BinaryCrossentropy()
-        self.mapping_loss = MappingConstraint(papr_method=papr_method)
+        self.mapping_loss = MappingConstraint(mapping_method)
         self.binary_cross_entropy_metrics = keras.metrics.BinaryCrossentropy()
         self.binary_accuracy_metrics = keras.metrics.BinaryAccuracy()
         if not continued:
@@ -40,7 +40,7 @@ class Train:
             self.regularization_factor = Saver.load_class_element("../data/class_element/regularization_factor.pkl")
         if ofdm_model:
             self.papr_loss = PAPRConstraint(num_syms=data[0].shape[0], snr=snr)
-            self.regularization_factor.append(tf.Variable(1., trainable=trainable))
+            self.regularization_factor.append(tf.Variable(0.1, trainable=trainable))
 
     def train_loop(self, epochs, encoder, decoder, mapper):
         history = History([], [], [], [], [], [], [])
@@ -64,8 +64,8 @@ class Train:
             history.epoch.append(epoch)
             history.loss.append(train_loss)
             history.val_loss.append(val_loss)
-            history.accuracy.append(np.mean(train_accuracy))
-            history.val_accuracy.append(np.mean(val_accuracy))
+            history.accuracy.append(train_accuracy)
+            history.val_accuracy.append(val_accuracy)
             history.papr.append(train_papr)
             history.val_papr.append(val_papr)
             if epoch % 50 == 0:
@@ -140,7 +140,7 @@ def main():
                                                input_shape=num_signals,
                                                ofdm_outshape=num_signals // OFDMParameters.fft_num.value * OFDMParameters.ofdm_syms.value)
     T = Train(data=data_set, lr=0.001, snr=snr, m=m, label_transform=False, trainable=False,
-              mse=False, papr_method='pow', continued=continued, ofdm_model=ofdm_model)  # papr_method:none\pow\papr
+              mse=False, mapping_method='pow', continued=continued, ofdm_model=ofdm_model)  # papr_method:none\pow\papr
     history = T.train_loop(epochs=1001, encoder=encoder, decoder=decoder, mapper=mapper)
 
     Saver.save_model(encoder, decoder, mapper, data_set.train_data, qam_padding_bits_test,

@@ -49,6 +49,7 @@ if __name__ == "__main__":
     plt.figure()
     plt.semilogy(history['snr'], history['ber'], 'ko')
     plt.show()
+    print(history['ber'])
 
 
 

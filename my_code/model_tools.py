@@ -12,17 +12,17 @@ class MappingConstraint(losses.Loss):
     Mapping constraint
     设计适合的约束项可以适当的减小PAPR
     """
-    def __init__(self, papr_method='none', name="mapping_constraint_loss"):
+    def __init__(self, mapping_method='none', name="mapping_constraint_loss"):
         super().__init__(name=name)
-        self.papr_method = papr_method
+        self.mapping_method = mapping_method
 
     def call(self, y_pred, y_true):
         constraint = 0.
-        if self.papr_method == 'papr':
+        if self.mapping_method == 'papr':
             amplitude = tf.math.square(y_pred[:, 0]) + tf.math.square(y_pred[:, 1])
             papr_constraint = tf.math.reduce_max(amplitude)/tf.math.reduce_mean(amplitude)
             constraint = papr_constraint
-        elif self.papr_method == 'pow':
+        elif self.mapping_method == 'pow':
             constraint = tf.reduce_mean(tf.square(y_pred))
         return constraint
 
