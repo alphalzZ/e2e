@@ -1,30 +1,34 @@
-from code.models import Models
-from code.model_tools import *
-from code.tools import *
+from functools import reduce
+from my_code.models import Models
+from my_code.model_tools import *
+from my_code.tools import *
+
+
 # np.random.seed(3)
 
 
 class Train:
-    def __init__(self, data: Data, lr, m, opt="adam", continued=0,
-                 label_transform=True, mse=True, papr_method='none'):
+    def __init__(self, data: Data, lr, m, snr, opt="adam", continued=0,
+                 label_transform=True, mse=False, papr_method='none', ofdm_model=0):
         """
         损失函数用两种方法度量，binary_cross_entropy和mse以及其他基于llr的度量方法
         papr约束和mse使用自适应多任务学习方法
         """
         self.mse = mse
+        self.data = data
+        self.label_transform = label_transform
+        self.__m = m
+        self.ofdm_model = ofdm_model
         if opt == "adam":
             self.optimizer = keras.optimizers.Adam(lr=lr)
         elif opt == "sgd":
             self.optimizer = keras.optimizers.SGD(lr=lr)
         else:
             self.optimizer = keras.optimizers.Ftrl(lr=lr)
-        self.prime_loss = keras.losses.MeanSquaredError() if mse\
+        self.prime_loss = keras.losses.MeanSquaredError() if mse \
             else keras.losses.BinaryCrossentropy()
-        self.papr_loss = MappingConstraint(papr_method=papr_method)
+        self.mapping_loss = MappingConstraint(papr_method=papr_method)
         self.metrics = keras.metrics.BinaryCrossentropy()
-        self.data = data
-        self.label_transform = label_transform
-        self.__m = m
         if not continued:
             self.regularization_factor = [tf.Variable(1., trainable=True),
                                           tf.Variable(1., trainable=True)]
@@ -32,13 +36,16 @@ class Train:
             if 'regularization_factor.pkl' not in os.listdir("./data/class_element"):
                 raise Exception("先保存模型！")
             self.regularization_factor = Saver.load_class_element("./data/class_element/regularization_factor.pkl")
+        if ofdm_model:
+            self.papr_loss = PAPRConstraint(num_syms=data[0].shape[0], snr=snr)
+            self.regularization_factor.append(tf.Variable(1., trainable=True))
 
     def train_loop(self, epochs, encoder, decoder, mapper):
         history = History([], [], [])
         x_train, y_train, x_val, y_val = self.data
         if self.mse and self.label_transform:
-            y_train = 16*y_train - 8
-            y_val = 16*y_val - 8
+            y_train = 16 * y_train - 8
+            y_val = 16 * y_val - 8
         if not self.mse:
             y_train = y_train.astype('int')
             y_val = y_val.astype('int')
@@ -56,13 +63,20 @@ class Train:
         with tf.GradientTape() as tape1:
             prediction = decoder(mapper(x_train))
             mapping = encoder(x_train)
-            current_loss = 1/(2*self.regularization_factor[0]**2)*self.prime_loss(y_train, prediction) + \
-                           1/(2*self.regularization_factor[1]**2)*self.papr_loss(mapping, mapping) +\
-                           tf.math.log(self.regularization_factor[0]**2*self.regularization_factor[1]**2)
+            binary_loss = self.prime_loss(y_train, prediction)
+            mapping_loss = self.mapping_loss(mapping, mapping)
+            current_loss = 1 / (2 * self.regularization_factor[0] ** 2) * binary_loss + \
+                           1 / (2 * self.regularization_factor[1] ** 2) * mapping_loss + \
+                           tf.math.log(reduce(lambda x, y: x * y ** 2, self.regularization_factor))
+            #  self.regularization_factor[0]**2*self.regularization_factor[1]**2*self.regularization_factor[2]**2
+            if self.ofdm_model:
+                papr_loss = self.papr_loss(mapping, mapping)
+                current_loss = current_loss + 1 / (2 * self.regularization_factor[-1] ** 2) * papr_loss + \
+                    tf.math.log(self.regularization_factor[-1]**2)
             train_loss = self.metrics(y_train, prediction)
         model_gradients = tape1.gradient(current_loss, [mapper.trainable_variables,
-                                         decoder.trainable_variables,
-                                         self.regularization_factor])
+                                                        decoder.trainable_variables,
+                                                        self.regularization_factor])
         self.optimizer.apply_gradients(zip(model_gradients[0], mapper.trainable_variables))
         self.optimizer.apply_gradients(zip(model_gradients[1], decoder.trainable_variables))
         self.optimizer.apply_gradients(zip(model_gradients[2], self.regularization_factor))
@@ -101,15 +115,16 @@ def main():
     else:
         M = Models(m=m, k=k, constraint='pow', channels=2)  # constraint:power or amplitude or other mapping methods
         encoder, decoder, mapper = M.get_model(model_name='mlp', snr=snr, ofdm_model=ofdm_model,
-                          input_shape=num_signals, ofdm_outshape=num_signals//OFDMParameters.fft_num.value * OFDMParameters.ofdm_syms.value)
-    T = Train(data=data_set, lr=0.001, m=m, label_transform=False,
+                                               input_shape=num_signals,
+                                               ofdm_outshape=num_signals // OFDMParameters.fft_num.value * OFDMParameters.ofdm_syms.value)
+    T = Train(data=data_set, lr=0.001, snr=snr, m=m, label_transform=False,
               mse=False, papr_method='pow', continued=continued)  # papr_method:none\pow\papr
     T.train_loop(epochs=51, encoder=encoder, decoder=decoder, mapper=mapper)
 
     Saver.save_model(encoder, decoder, mapper, data_set.train_data, qam_padding_bits_test,
                      model_save_path=model_path, result_save_path=result_save_path)
     Saver.save_result(result_save_path, qam_padding_bits, qam_padding_bits_test)
-    Saver.save_class_element(T, "regularization_factor", "./data/class_element/regularization_factor.pkl")
+    Saver.save_class_element(T, "regularization_factor", "../data/class_element/regularization_factor.pkl")
 
 
 if __name__ == "__main__":

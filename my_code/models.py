@@ -1,7 +1,7 @@
 import numpy as np
 from tensorflow import keras
 from tensorflow.keras import layers
-from code.model_tools import *
+from my_code.model_tools import *
 
 
 class Models:
