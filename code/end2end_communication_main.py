@@ -20,7 +20,7 @@ class Train:
             self.optimizer = keras.optimizers.Ftrl(lr=lr)
         self.prime_loss = keras.losses.MeanSquaredError() if mse\
             else keras.losses.BinaryCrossentropy()
-        self.papr_loss = PAPRConstraint(papr_method=papr_method)
+        self.papr_loss = MappingConstraint(papr_method=papr_method)
         self.metrics = keras.metrics.BinaryCrossentropy()
         self.data = data
         self.label_transform = label_transform

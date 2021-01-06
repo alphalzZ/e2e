@@ -6,9 +6,9 @@ from tensorflow.keras import layers, losses
 print('Tensorflow version:{}'.format(tf.__version__))
 
 
-class PAPRConstraint(losses.Loss):
+class MappingConstraint(losses.Loss):
     """
-    PAPR constraint
+    Mapping constraint
     设计适合的约束项可以适当的减小PAPR
     """
     def __init__(self, papr_method='none', name="papr_constraint_loss"):
@@ -27,6 +27,9 @@ class PAPRConstraint(losses.Loss):
 
     def get_config(self):
         return {"papr_method": self.papr_method}
+
+
+
 
 
 class MappingLayer(layers.Layer):
@@ -153,15 +156,15 @@ class OFDMDeModulation(layers.Layer):
 
 if __name__ == "__main__":
     mapping_pre = np.random.randn(128, 2)
-    # papr_loss = PAPRConstraint()
-    # loss = papr_loss(y_pred=mapping_pre, y_true=mapping_pre)
-    # m = MappingLayer()
-    # out = m(mapping_pre)
-    # signal = np.random.randn(10, 2)
-    # Noise = GaussianNoise(10, ofdm_model=False, num_syms=128)
-    # out2 = Noise(signal)
-    # PN = PowerNormalize()
-    # out3 = PN(np.array([[1.,2.], [3.,4.], [5.,6.]]))
+    papr_loss = MappingConstraint()
+    loss = papr_loss(y_pred=mapping_pre, y_true=mapping_pre)
+    m = MappingLayer()
+    out = m(mapping_pre)
+    signal = np.random.randn(10, 2)
+    Noise = GaussianNoise(10, ofdm_model=False, num_syms=128)
+    out2 = Noise(signal)
+    PN = PowerNormalize()
+    out3 = PN(np.array([[1.,2.], [3.,4.], [5.,6.]]))
     ofdm = OFDMModulation(num_sym=128, num_gard=16, num_fft=64)
     ofdm_out = ofdm(mapping_pre)
     deofdm = OFDMDeModulation(ofdm_outshape=128//64*80, num_gard=16, num_fft=64)

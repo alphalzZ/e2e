@@ -138,6 +138,6 @@ class OFDMParameters(Enum):
 
 if __name__ == "__main__":
     model_save_path = Model_save_path(r'./my_model/mlp_encoder_2', r'./my_model/mlp_decoder',
-                                      r'./my_model/mlp_mapping_model', './my_model/mlp_ofdm_mapping_model_constellation')
+                                      r'./my_model/mlp_mapper')
     target_path = '../my_model/'
     make_dirs(model_save_path, target_path)
