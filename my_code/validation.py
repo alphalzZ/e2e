@@ -1,5 +1,5 @@
-from code.tools import *
-from code.model_tools import *
+from my_code.tools import *
+from my_code.model_tools import *
 import matplotlib.pyplot as plt
 from matplotlib.pyplot import scatter
 
