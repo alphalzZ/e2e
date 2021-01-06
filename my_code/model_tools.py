@@ -52,14 +52,6 @@ class PAPRConstraint(losses.Loss):
         return papr
 
 
-class PAPRMetrics(metrics.Metric):
-    pass
-
-
-class BERMetric(metrics.Metric):
-    pass
-
-
 class MappingLayer(layers.Layer):
     """
     amplitude constraint

@@ -8,7 +8,7 @@ from my_code.tools import *
 
 
 class Train:
-    def __init__(self, data: Data, lr, m, snr, opt="adam", continued=0,
+    def __init__(self, data: Data, lr, m, snr, opt="adam", continued=0, trainable=True,
                  label_transform=True, mse=False, papr_method='none', ofdm_model=0):
         """
         损失函数用两种方法度量，binary_cross_entropy和mse以及其他基于llr的度量方法
@@ -17,6 +17,7 @@ class Train:
         self.mse = mse
         self.data = data
         self.label_transform = label_transform
+        self.trainable = trainable
         self.__m = m
         self.ofdm_model = ofdm_model
         if opt == "adam":
@@ -28,20 +29,21 @@ class Train:
         self.prime_loss = keras.losses.MeanSquaredError() if mse \
             else keras.losses.BinaryCrossentropy()
         self.mapping_loss = MappingConstraint(papr_method=papr_method)
-        self.metrics = keras.metrics.BinaryCrossentropy()
+        self.binary_cross_entropy_metrics = keras.metrics.BinaryCrossentropy()
+        self.binary_accuracy_metrics = keras.metrics.BinaryAccuracy()
         if not continued:
-            self.regularization_factor = [tf.Variable(1., trainable=True),
-                                          tf.Variable(1., trainable=True)]
+            self.regularization_factor = [tf.Variable(1., trainable=trainable),
+                                          tf.Variable(1., trainable=trainable)]
         else:
-            if 'regularization_factor.pkl' not in os.listdir("./data/class_element"):
+            if 'regularization_factor.pkl' not in os.listdir("../data/class_element"):
                 raise Exception("先保存模型！")
-            self.regularization_factor = Saver.load_class_element("./data/class_element/regularization_factor.pkl")
+            self.regularization_factor = Saver.load_class_element("../data/class_element/regularization_factor.pkl")
         if ofdm_model:
             self.papr_loss = PAPRConstraint(num_syms=data[0].shape[0], snr=snr)
-            self.regularization_factor.append(tf.Variable(1., trainable=True))
+            self.regularization_factor.append(tf.Variable(1., trainable=trainable))
 
     def train_loop(self, epochs, encoder, decoder, mapper):
-        history = History([], [], [])
+        history = History([], [], [], [], [], [], [])
         x_train, y_train, x_val, y_val = self.data
         if self.mse and self.label_transform:
             y_train = 16 * y_train - 8
@@ -50,14 +52,28 @@ class Train:
             y_train = y_train.astype('int')
             y_val = y_val.astype('int')
         for epoch in range(epochs):
-            train_loss = self.__train_step(encoder, decoder, mapper, x_train, y_train)
-            val_loss = self.metrics(decoder(encoder(x_val)), y_val)
+            train_loss, train_accuracy, train_papr = self.__train_step(encoder, decoder, mapper, x_train, y_train)
+            mapping = encoder(x_val)
+            val_pre = decoder(mapper(x_val))
+            #  val metrics
+            val_loss = self.binary_cross_entropy_metrics(y_val, val_pre)
+            val_accuracy = self.binary_accuracy_metrics(y_val, val_pre)
+            val_papr = -1.
+            if self.ofdm_model:
+                val_papr = self.papr_loss(mapping, mapping).numpy()
             history.epoch.append(epoch)
             history.loss.append(train_loss)
             history.val_loss.append(val_loss)
+            history.accuracy.append(np.mean(train_accuracy))
+            history.val_accuracy.append(np.mean(val_accuracy))
+            history.papr.append(train_papr)
+            history.val_papr.append(val_papr)
             if epoch % 50 == 0:
-                print("epoch: {}, current_train_loss: {}, current_val_loss: {}".format(epoch, train_loss, val_loss))
+                print("factors:{}".format(list(map(lambda x:x.numpy(), self.regularization_factor))))
+                print("epoch:{}, loss:{}, val_loss:{},\n acc:{}, val_acc:{}, papr:{}, val_papr:{}".
+                      format(epoch, train_loss, val_loss, train_accuracy, val_accuracy, train_papr, val_papr))
         plot(history, 0)
+        return history
 
     def __train_step(self, encoder, decoder, mapper, x_train, y_train):
         with tf.GradientTape() as tape1:
@@ -69,18 +85,24 @@ class Train:
                            1 / (2 * self.regularization_factor[1] ** 2) * mapping_loss + \
                            tf.math.log(reduce(lambda x, y: x * y ** 2, self.regularization_factor))
             #  self.regularization_factor[0]**2*self.regularization_factor[1]**2*self.regularization_factor[2]**2
+            train_papr = -1.
             if self.ofdm_model:
                 papr_loss = self.papr_loss(mapping, mapping)
+                train_papr = papr_loss.numpy()
                 current_loss = current_loss + 1 / (2 * self.regularization_factor[-1] ** 2) * papr_loss + \
                     tf.math.log(self.regularization_factor[-1]**2)
-            train_loss = self.metrics(y_train, prediction)
-        model_gradients = tape1.gradient(current_loss, [mapper.trainable_variables,
-                                                        decoder.trainable_variables,
-                                                        self.regularization_factor])
+            train_loss = self.binary_cross_entropy_metrics(y_train, prediction)
+            train_accuracy = self.binary_accuracy_metrics(y_train, prediction)
+        trainable_variables = [mapper.trainable_variables, decoder.trainable_variables]
+        if self.trainable:
+            trainable_variables.append(self.regularization_factor)
+        model_gradients = tape1.gradient(current_loss, trainable_variables)
         self.optimizer.apply_gradients(zip(model_gradients[0], mapper.trainable_variables))
         self.optimizer.apply_gradients(zip(model_gradients[1], decoder.trainable_variables))
-        self.optimizer.apply_gradients(zip(model_gradients[2], self.regularization_factor))
-        return train_loss
+        if self.trainable:
+            self.optimizer.apply_gradients(zip(model_gradients[2], self.regularization_factor))
+
+        return train_loss, train_accuracy, train_papr
 
 
 def main():
@@ -117,9 +139,9 @@ def main():
         encoder, decoder, mapper = M.get_model(model_name='mlp', snr=snr, ofdm_model=ofdm_model,
                                                input_shape=num_signals,
                                                ofdm_outshape=num_signals // OFDMParameters.fft_num.value * OFDMParameters.ofdm_syms.value)
-    T = Train(data=data_set, lr=0.001, snr=snr, m=m, label_transform=False,
-              mse=False, papr_method='pow', continued=continued)  # papr_method:none\pow\papr
-    T.train_loop(epochs=51, encoder=encoder, decoder=decoder, mapper=mapper)
+    T = Train(data=data_set, lr=0.001, snr=snr, m=m, label_transform=False, trainable=False,
+              mse=False, papr_method='pow', continued=continued, ofdm_model=ofdm_model)  # papr_method:none\pow\papr
+    history = T.train_loop(epochs=1001, encoder=encoder, decoder=decoder, mapper=mapper)
 
     Saver.save_model(encoder, decoder, mapper, data_set.train_data, qam_padding_bits_test,
                      model_save_path=model_path, result_save_path=result_save_path)
