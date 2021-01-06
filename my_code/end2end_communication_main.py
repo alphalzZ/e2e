@@ -28,7 +28,8 @@ class Train:
         self.prime_loss = keras.losses.MeanSquaredError() if mse \
             else keras.losses.BinaryCrossentropy()
         self.mapping_loss = MappingConstraint(papr_method=papr_method)
-        self.metrics = keras.metrics.BinaryCrossentropy()
+        self.binary_cross_entropy_metrics = keras.metrics.BinaryCrossentropy()
+        self.binary_accuracy_metrics = keras.metrics.BinaryAccuracy()
         if not continued:
             self.regularization_factor = [tf.Variable(1., trainable=True),
                                           tf.Variable(1., trainable=True)]
@@ -41,7 +42,7 @@ class Train:
             self.regularization_factor.append(tf.Variable(1., trainable=True))
 
     def train_loop(self, epochs, encoder, decoder, mapper):
-        history = History([], [], [])
+        history = History([], [], [], [], [])
         x_train, y_train, x_val, y_val = self.data
         if self.mse and self.label_transform:
             y_train = 16 * y_train - 8
@@ -50,13 +51,18 @@ class Train:
             y_train = y_train.astype('int')
             y_val = y_val.astype('int')
         for epoch in range(epochs):
-            train_loss = self.__train_step(encoder, decoder, mapper, x_train, y_train)
-            val_loss = self.metrics(decoder(encoder(x_val)), y_val)
+            train_loss, train_accuracy = self.__train_step(encoder, decoder, mapper, x_train, y_train)
+            val_pre = decoder(mapper(x_val))
+            val_loss = self.binary_cross_entropy_metrics(val_pre, y_val)
+            val_accuracy = self.binary_accuracy_metrics(val_pre, y_val)
             history.epoch.append(epoch)
             history.loss.append(train_loss)
             history.val_loss.append(val_loss)
+            history.accuracy.append(np.mean(train_accuracy))
+            history.accuracy.append(np.mean(val_accuracy))
             if epoch % 50 == 0:
-                print("epoch: {}, current_train_loss: {}, current_val_loss: {}".format(epoch, train_loss, val_loss))
+                print("epoch:{}, loss:{}, val_loss:{}, acc:{}, val_acc:{}".
+                      format(epoch, train_loss, val_loss, train_accuracy, val_accuracy))
         plot(history, 0)
 
     def __train_step(self, encoder, decoder, mapper, x_train, y_train):
@@ -73,14 +79,15 @@ class Train:
                 papr_loss = self.papr_loss(mapping, mapping)
                 current_loss = current_loss + 1 / (2 * self.regularization_factor[-1] ** 2) * papr_loss + \
                     tf.math.log(self.regularization_factor[-1]**2)
-            train_loss = self.metrics(y_train, prediction)
+            train_loss = self.binary_cross_entropy_metrics(y_train, prediction)
+            train_accuracy = self.binary_accuracy_metrics(y_train, prediction)
         model_gradients = tape1.gradient(current_loss, [mapper.trainable_variables,
                                                         decoder.trainable_variables,
                                                         self.regularization_factor])
         self.optimizer.apply_gradients(zip(model_gradients[0], mapper.trainable_variables))
         self.optimizer.apply_gradients(zip(model_gradients[1], decoder.trainable_variables))
         self.optimizer.apply_gradients(zip(model_gradients[2], self.regularization_factor))
-        return train_loss
+        return train_loss, train_accuracy
 
 
 def main():

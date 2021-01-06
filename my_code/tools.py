@@ -11,7 +11,7 @@ from enum import Enum
 
 GH_PATH = namedtuple('gh_path', 'g_path, h_path')
 Data = namedtuple('data', 'train_data, train_label, test_data, test_label')
-History = namedtuple('hist', 'epoch, loss, val_loss')
+History = namedtuple('hist', 'epoch, loss, val_loss, accuracy, val_accuracy')
 Result_save_path = namedtuple('result_save_path',
                               'mapper_train_pre, mapper_test_pre, decoder_train_pre, decoder_test_pre, train_bits, test_bits')
 Model_save_path = namedtuple('model_save_path', 'encoder_save_path, decoder_save_path, mapper_save_path')
