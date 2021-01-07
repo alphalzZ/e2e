@@ -6,15 +6,37 @@ import tensorflow as tf
 import matplotlib.pyplot as plt
 from collections import namedtuple
 from tensorflow import keras
+import json
+from typing import NamedTuple
 from enum import Enum
+
+
+def json_serializable(cls):
+    def as_dict(self):
+        yield {name: value for name, value in zip(
+            self._fields,
+            iter(super(cls, self).__iter__()))}
+    cls.__iter__ = as_dict
+    return cls
 
 
 GH_PATH = namedtuple('gh_path', 'g_path, h_path')
 Data = namedtuple('data', 'train_data, train_label, test_data, test_label')
-History = namedtuple('hist', 'epoch, loss, val_loss, accuracy, val_accuracy, papr, val_papr')
 Result_save_path = namedtuple('result_save_path',
                               'mapper_train_pre, mapper_test_pre, decoder_train_pre, decoder_test_pre, train_bits, test_bits')
 Model_save_path = namedtuple('model_save_path', 'encoder_save_path, decoder_save_path, mapper_save_path')
+
+
+@json_serializable
+class History(NamedTuple):
+    epoch: list
+    loss: list
+    val_loss: list
+    accuracy: list
+    val_accuracy: list
+    papr: list
+    val_papr: list
+    # namedtuple('hist', 'epoch, loss, val_loss, accuracy, val_accuracy, papr, val_papr')
 
 
 def load_mat(path):
@@ -83,6 +105,13 @@ def model_load(model_path: Model_save_path):
     return encoder, decoder, mapper
 
 
+def history_to_dict(hist: History):
+    hist_dict = {}
+    for filed_name, filed_data in zip(hist._fields, hist):
+        hist_dict[filed_name] = filed_data
+    return hist_dict
+
+
 class Saver:
     @classmethod
     def save_model(cls, encoder, decoder, mapper, x_train, x_test,
@@ -117,6 +146,11 @@ class Saver:
             element = pickle.load(f)
         return element
 
+    @classmethod
+    def save_history(cls, path, hist: History):
+        with open(path, 'w') as f:
+            json.dump(hist, f)
+
 
 def make_dirs(save_path, target_path):
     """
@@ -137,7 +171,10 @@ class OFDMParameters(Enum):
 
 
 if __name__ == "__main__":
-    model_save_path = Model_save_path(r'./my_model/mlp_encoder_2', r'./my_model/mlp_decoder',
-                                      r'./my_model/mlp_mapper')
+    model_save_path = Model_save_path(r'../my_model/mlp_encoder', r'../my_model/mlp_decoder',
+                                      r'../my_model/mlp_mapper')
     target_path = '../my_model/'
     make_dirs(model_save_path, target_path)
+    history = History([1, 2], [2], [3, 4], [4], [5], [6], [7])
+    Saver.save_history("../data/history.json", history)
+    print("finish")

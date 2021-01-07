@@ -2,6 +2,8 @@ from my_code.tools import *
 from my_code.model_tools import *
 import matplotlib.pyplot as plt
 from matplotlib.pyplot import scatter
+import tensorflow as tf
+# tf.debugging.set_log_device_placement(True)
 
 
 """
@@ -10,7 +12,11 @@ from matplotlib.pyplot import scatter
     2.载入训练好的编解码模型
     3.对encoder加载噪声，送入decoder解码计算误比特率并进行作图
 """
-if __name__ == "__main__":
+#  第一种验证：同一批数据，但是使用不同的噪声，验证模型对噪声的泛化能力
+#  第二种验证：不同的数据，使用相同噪声，验证模型对数据的泛化能力
+
+
+def validation_one():
     gh_path = GH_PATH(r'D:\LYJ\AutoEncoder-Based-Communication-System-master\matlab_code\genarateH G\G.mat',
                       r'D:\LYJ\AutoEncoder-Based-Communication-System-master\matlab_code\genarateH G\H.mat')
     model_load_path = Model_save_path(r'../my_model/mlp_encoder', r'../my_model/mlp_decoder',
@@ -28,7 +34,7 @@ if __name__ == "__main__":
         ofdm_ifft = OFDMModulation(num_syms, name='ofdm')
         ofdm_fft = OFDMDeModulation(num_syms // OFDMParameters.fft_num.value * OFDMParameters.ofdm_syms.value)
     history = {'snr': [], 'ber': []}
-    for snr in range(0, 31):
+    for snr in range(1, 25):
         channel = GaussianNoise(snr, ofdm_model=ofdm_model, num_sym=80, nbps=m, num_syms=num_syms)
         mapping = encoder(qam_padding_bits_test)
         if ofdm_model:
@@ -52,4 +58,6 @@ if __name__ == "__main__":
     print(history['ber'])
 
 
-
+if __name__ == "__main__":
+    with tf.device('/CPU:0'):
+        validation_one()
