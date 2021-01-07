@@ -8,7 +8,7 @@ from my_code.tools import *
 
 
 class Train:
-    def __init__(self, data: Data, lr, m, snr, opt="adam", continued=0, trainable=True,
+    def __init__(self, data: Data, lr, m, snr, opt="adam", continued=0, factor_trainable=1, train_union=0,
                  label_transform=True, mse=False, mapping_method='none', ofdm_model=0):
         """
         损失函数用两种方法度量，binary_cross_entropy和mse以及其他基于llr的度量方法
@@ -17,7 +17,8 @@ class Train:
         self.mse = mse
         self.data = data
         self.label_transform = label_transform
-        self.trainable = trainable
+        self.factor_trainable = factor_trainable
+        self.train_union = train_union
         self.__m = m
         self.ofdm_model = ofdm_model
         if opt == "adam":
@@ -32,15 +33,16 @@ class Train:
         self.binary_cross_entropy_metrics = keras.metrics.BinaryCrossentropy()
         self.binary_accuracy_metrics = keras.metrics.BinaryAccuracy()
         if not continued:
-            self.regularization_factor = [tf.Variable(1., trainable=trainable),
-                                          tf.Variable(1., trainable=trainable)]
+            self.regularization_factor = [tf.Variable(1., trainable=factor_trainable),
+                                          tf.Variable(1., trainable=factor_trainable)]
+            if ofdm_model:
+                self.regularization_factor.append(tf.Variable(0.1, trainable=factor_trainable))
         else:
             if 'regularization_factor.pkl' not in os.listdir("../data/class_element"):
                 raise Exception("先保存模型！")
             self.regularization_factor = Saver.load_class_element("../data/class_element/regularization_factor.pkl")
         if ofdm_model:
             self.papr_loss = PAPRConstraint(num_syms=data[0].shape[0], snr=snr)
-            self.regularization_factor.append(tf.Variable(0.1, trainable=trainable))
 
     def train_loop(self, epochs, encoder, decoder, mapper):
         history = History([], [], [], [], [], [], [])
@@ -52,7 +54,7 @@ class Train:
             y_train = y_train.astype('int')
             y_val = y_val.astype('int')
         for epoch in range(epochs):
-            train_loss, train_accuracy, train_papr = self.__train_step(encoder, decoder, mapper, x_train, y_train)
+            train_loss, train_accuracy, train_papr = self.__train_step(decoder, mapper, x_train, y_train)
             mapping = encoder(x_val)
             val_pre = decoder(mapper(x_val))
             #  val metrics
@@ -69,24 +71,23 @@ class Train:
             history.papr.append(train_papr)
             history.val_papr.append(val_papr)
             if epoch % 50 == 0:
-                print("factors:{}".format(list(map(lambda x:x.numpy(), self.regularization_factor))))
+                print("factors:{}".format(list(map(lambda x: x.numpy(), self.regularization_factor))))
                 print("epoch:{}, loss:{}, val_loss:{},\n acc:{}, val_acc:{}, papr:{}, val_papr:{}".
                       format(epoch, train_loss, val_loss, train_accuracy, val_accuracy, train_papr, val_papr))
         plot(history, 0)
         return history
 
-    def __train_step(self, encoder, decoder, mapper, x_train, y_train):
+    def __train_step(self, decoder, mapper, x_train, y_train):
         with tf.GradientTape() as tape1:
             prediction = decoder(mapper(x_train))
-            mapping = encoder(x_train)
+            mapping = mapper(x_train)
             binary_loss = self.prime_loss(y_train, prediction)
             mapping_loss = self.mapping_loss(mapping, mapping)
             current_loss = 1 / (2 * self.regularization_factor[0] ** 2) * binary_loss + \
                            1 / (2 * self.regularization_factor[1] ** 2) * mapping_loss + \
                            tf.math.log(reduce(lambda x, y: x * y ** 2, self.regularization_factor))
-            #  self.regularization_factor[0]**2*self.regularization_factor[1]**2*self.regularization_factor[2]**2
             train_papr = -1.
-            if self.ofdm_model:
+            if self.ofdm_model and self.train_union:  # ofdm训练ber
                 papr_loss = self.papr_loss(mapping, mapping)
                 train_papr = papr_loss.numpy()
                 current_loss = current_loss + 1 / (2 * self.regularization_factor[-1] ** 2) * papr_loss + \
@@ -94,12 +95,12 @@ class Train:
             train_loss = self.binary_cross_entropy_metrics(y_train, prediction)
             train_accuracy = self.binary_accuracy_metrics(y_train, prediction)
         trainable_variables = [mapper.trainable_variables, decoder.trainable_variables]
-        if self.trainable:
+        if self.factor_trainable:
             trainable_variables.append(self.regularization_factor)
         model_gradients = tape1.gradient(current_loss, trainable_variables)
         self.optimizer.apply_gradients(zip(model_gradients[0], mapper.trainable_variables))
         self.optimizer.apply_gradients(zip(model_gradients[1], decoder.trainable_variables))
-        if self.trainable:
+        if self.factor_trainable:
             self.optimizer.apply_gradients(zip(model_gradients[2], self.regularization_factor))
 
         return train_loss, train_accuracy, train_papr
@@ -110,7 +111,7 @@ def main():
                       r'D:\LYJ\AutoEncoder-Based-Communication-System-master\matlab_code\genarateH G\H.mat')
     g = load_mat(gh_path.g_path)['outputG']
     h = load_mat(gh_path.h_path)['outputH']
-    m, bit_nums, snr, channels = 4, 10000, 23, 2
+    m, bit_nums, snr, channels = 4, 10000, 10, 2
     result_save_path = Result_save_path(r'../result_data/%dsnr_encoder_train_mapping.mat' % 23,
                                         r'../result_data/%dsnr_encoder_test_mapping.mat' % 23,
                                         r'../result_data/%dsnr_decoder_train_recover.mat' % 23,
@@ -130,7 +131,7 @@ def main():
     original_bits = ldpc_encoder.bits
     data_set = Data(qam_padding_bits, qam_padding_bits, qam_padding_bits_val, qam_padding_bits_val)
     num_signals, k = qam_padding_bits.shape[0], int(qam_padding_bits.shape[1] // m)
-    continued, ofdm_model = 0, 1
+    continued, ofdm_model, train_union = 0, 1, 0  # ofdm 模式下需要先训练ber，再训练papr（0,1,0）-->（1,1,1）
     model_path = ofdm_model_save_path if ofdm_model else model_save_path
     if continued:
         encoder, decoder, mapper = model_load(model_path=model_path)
@@ -139,9 +140,9 @@ def main():
         encoder, decoder, mapper = M.get_model(model_name='mlp', snr=snr, ofdm_model=ofdm_model,
                                                input_shape=num_signals,
                                                ofdm_outshape=num_signals // OFDMParameters.fft_num.value * OFDMParameters.ofdm_syms.value)
-    T = Train(data=data_set, lr=0.001, snr=snr, m=m, label_transform=False, trainable=False,
+    T = Train(data=data_set, lr=0.001, snr=snr, m=m, label_transform=False, train_union=train_union, factor_trainable=0,
               mse=False, mapping_method='pow', continued=continued, ofdm_model=ofdm_model)  # papr_method:none\pow\papr
-    history = T.train_loop(epochs=1001, encoder=encoder, decoder=decoder, mapper=mapper)
+    history = T.train_loop(epochs=5001, encoder=encoder, decoder=decoder, mapper=mapper)
 
     Saver.save_model(encoder, decoder, mapper, data_set.train_data, qam_padding_bits_test,
                      model_save_path=model_path, result_save_path=result_save_path)

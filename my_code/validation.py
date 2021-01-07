@@ -25,10 +25,10 @@ if __name__ == "__main__":
     ofdm_model = 1
     encoder, decoder, mapper = model_load(ofdm_model_load_path if ofdm_model else model_load_path)
     if ofdm_model:
-        ofdm_ifft = ofdm_layer = OFDMModulation(num_syms, name='ofdm')
+        ofdm_ifft = OFDMModulation(num_syms, name='ofdm')
         ofdm_fft = OFDMDeModulation(num_syms // OFDMParameters.fft_num.value * OFDMParameters.ofdm_syms.value)
     history = {'snr': [], 'ber': []}
-    for snr in range(0, 31, 2):
+    for snr in range(0, 31):
         channel = GaussianNoise(snr, ofdm_model=ofdm_model, num_sym=80, nbps=m, num_syms=num_syms)
         mapping = encoder(qam_padding_bits_test)
         if ofdm_model:
