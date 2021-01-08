@@ -9,8 +9,8 @@ class Models:
     主要从attention、语义分割、自编码器、GAN模型中寻找灵感
     model: self-attention / conv1d / mlp / gan / autoencoder
     """
-    def __init__(self, m, k, constraint, channels):
-        self.m, self.k, self.constraint = m, k, constraint
+    def __init__(self, m, constraint, channels):
+        self.m, self.constraint = m, constraint
         self.channels = channels
         self.encoder = None
         self.decoder = None
@@ -18,7 +18,7 @@ class Models:
 
     def get_model(self, model_name, snr, input_shape, ofdm_outshape, ofdm_model):
         if model_name == 'mlp':
-            model = MLP(m=self.m, k=self.k, constraint=self.constraint, ofdm_outshape=ofdm_outshape,
+            model = MLP(m=self.m, constraint=self.constraint, ofdm_outshape=ofdm_outshape,
                         channels=self.channels, ofdm_model=ofdm_model, input_shape=input_shape)
             self.encoder, self.decoder, self.mapping_model = model.get_model(snr)
         elif model_name == 'attention':
@@ -35,8 +35,8 @@ class Models:
 
 
 class MLP:
-    def __init__(self, m, k, constraint, channels, input_shape, ofdm_outshape, ofdm_model):
-        self.m, self.k = m, k
+    def __init__(self, m, constraint, channels, input_shape, ofdm_outshape, ofdm_model):
+        self.m = m
         self.channels = channels
         self.ofdm_model = ofdm_model
         self.input_shape = input_shape
@@ -92,18 +92,17 @@ class MLP:
         """
         mapper = self.mapper(snr)
         decoder = self.decoder()
-        encoder = keras.Model(inputs=mapper.inputs, outputs=mapper.get_layer(name='normalize').output)
+        encoder = keras.Model(inputs=mapper.inputs, outputs=mapper.get_layer(name='normalize').output, name='encoder')
         mapper.summary()
         return encoder, decoder, mapper
 
 
 def main():
-    N, m, k = 128, 4, 75  # 分组个数， 每符号比特数， 符号个数
-    train_data = np.random.randint(0, 2, (N*k, m))
-    M = Models(m=m, k=k, constraint='amp', channels=2)
+    train_data = np.random.randint(0, 2, (3762, 3))
+    M = Models(m=3, constraint='amp', channels=2)
     #  encoder:用于validation，mapper用于生成星座图便于观察
     encoder, decoder, mapper\
-        = M.get_model(model_name='mlp', snr=23, input_shape=N*k, ofdm_outshape=128*75//64*80, ofdm_model=True)
+        = M.get_model(model_name='mlp', snr=23, input_shape=3762, ofdm_outshape=3762//64*80, ofdm_model=True)
     mapping_out = mapper(train_data)
     trans_out = encoder(train_data)
     recover_out = decoder(trans_out)

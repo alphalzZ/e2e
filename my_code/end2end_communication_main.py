@@ -2,14 +2,15 @@ from functools import reduce
 from my_code.models import Models
 from my_code.model_tools import *
 from my_code.tools import *
-
+import tensorflow as tf
+gpu_options = tf.compat.v1.GPUOptions(per_process_gpu_memory_fraction=0.5)
 
 # np.random.seed(3)
 
 
 class Train:
     def __init__(self, data: Data, lr, m, snr, opt="adam", continued=0, factor_trainable=1, train_union=0,
-                 label_transform=True, mse=False, mapping_method='none', ofdm_model=0):
+                 label_transform=False, mse=False, mapping_method='none', ofdm_model=0):
         """
         损失函数用两种方法度量，binary_cross_entropy和mse以及其他基于llr的度量方法
         papr约束和mse使用自适应多任务学习方法
@@ -36,16 +37,18 @@ class Train:
             self.regularization_factor = [tf.Variable(1., trainable=factor_trainable),
                                           tf.Variable(1., trainable=factor_trainable)]
             if ofdm_model:
-                self.regularization_factor.append(tf.Variable(0.01, trainable=factor_trainable))
+                self.regularization_factor.append(tf.Variable(0.001, trainable=factor_trainable))
         else:
             if 'regularization_factor.pkl' not in os.listdir("../data/class_element"):
                 raise Exception("先保存模型！")
             self.regularization_factor = Saver.load_class_element("../data/class_element/regularization_factor.pkl")
-            self.regularization_factor[-1] = tf.Variable(0.0001, trainable=factor_trainable)  # 临时调整
+            if factor_trainable:
+                tmp = list(map(lambda x: tf.Variable(x.value(), trainable=factor_trainable), self.regularization_factor))
+                self.regularization_factor = tmp
         if ofdm_model:
             self.papr_loss = PAPRConstraint(num_syms=data[0].shape[0], snr=snr)
 
-    def train_loop(self, epochs, encoder, decoder, mapper):
+    def train_loop(self, epochs, decoder, mapper):
         history = History([], [], [], [], [], [], [])
         x_train, y_train, x_val, y_val = self.data
         if self.mse and self.label_transform:
@@ -112,19 +115,19 @@ def main():
                       r'D:\LYJ\AutoEncoder-Based-Communication-System-master\matlab_code\genarateH G\H.mat')
     g = load_mat(gh_path.g_path)['outputG']
     h = load_mat(gh_path.h_path)['outputH']
-    m, bit_nums, snr, channels = 4, 10000, 10, 2
+    m, bit_nums, snr, channels = 3, 10000, 10, 2
     result_save_path = Result_save_path(r'../result_data/%dsnr_encoder_train_mapping.mat' % 23,
                                         r'../result_data/%dsnr_encoder_test_mapping.mat' % 23,
                                         r'../result_data/%dsnr_decoder_train_recover.mat' % 23,
                                         r'../result_data/%dsnr_decoder_test_recover.mat' % 23,
                                         r'../result_data/train_bits.mat',
                                         r'../result_data/test_bits.mat')
-    model_save_path = Model_save_path(r'../my_model/mlp_encoder', r'../my_model/mlp_decoder',
-                                      r'../my_model/mlp_mapper')
-    ofdm_model_save_path = Model_save_path(r'../my_model/mlp_ofdm_encoder', r'../my_model/mlp_ofdm_decoder',
-                                           r'../my_model/mlp_ofdm_mapper')
-    ofdm_papr_model_save_path = Model_save_path(r'../my_model/mlp_ofdm_papr_encoder', r'../my_model/mlp_ofdm_papr_decoder',
-                                           r'../my_model/mlp_ofdm_papr_mapper')
+    norm_model_save_path = Model_save_path(r'../my_model8/mlp_encoder', r'../my_model8/mlp_decoder',
+                                      r'../my_model8/mlp_mapper')
+    ofdm_model_save_path = Model_save_path(r'../my_model8/mlp_ofdm_encoder', r'../my_model8/mlp_ofdm_decoder',
+                                           r'../my_model8/mlp_ofdm_mapper')
+    ofdm_papr_model_save_path = Model_save_path(r'../my_model8/mlp_ofdm_papr_encoder', r'../my_model8/mlp_ofdm_papr_decoder',
+                                           r'../my_model8/mlp_ofdm_papr_mapper')
 
     ldpc_encoder = LDPCEncode(g, m, bit_nums)
     qam_padding_bits = ldpc_encoder.encode(model_name='mlp')  # 随机比特流数据作为训练数据
@@ -134,25 +137,33 @@ def main():
     original_bits = ldpc_encoder.bits
     data_set = Data(qam_padding_bits, qam_padding_bits, qam_padding_bits_val, qam_padding_bits_val)
     num_signals, k = qam_padding_bits.shape[0], int(qam_padding_bits.shape[1] // m)
-    continued, ofdm_model, train_union = 1, 1, 1  # ofdm 模式下需要先训练ber，再训练papr（0,1,0）-->（1,1,1）
+    continued, ofdm_model, train_union = 0, 1, 0  # ofdm 模式下需要先训练ber，再训练papr（0,1,0）-->（1,1,1）
     factor_trainable = 0
-    model_path = ofdm_model_save_path if ofdm_model else model_save_path
+    model_load_path = ofdm_model_save_path
+    model_save_path = ofdm_model_save_path
     if continued:
-        encoder, decoder, mapper = model_load(model_path=model_path)
+        encoder, decoder, mapper = model_load(model_path=model_load_path)
+        if train_union:  # 冻结decoder
+            for layer in decoder.layers:
+                layer.trainable = False
     else:
-        M = Models(m=m, k=k, constraint='pow', channels=2)  # constraint:power or amplitude or other mapping methods
+        M = Models(m=m, constraint='amp', channels=2)  # constraint:power or amplitude or other mapping methods
         encoder, decoder, mapper = M.get_model(model_name='mlp', snr=snr, ofdm_model=ofdm_model,
                                                input_shape=num_signals,
                                                ofdm_outshape=num_signals // OFDMParameters.fft_num.value * OFDMParameters.ofdm_syms.value)
-    T = Train(data=data_set, lr=0.0001, snr=snr, m=m, label_transform=False, train_union=train_union, factor_trainable=factor_trainable,
-              mse=False, mapping_method='pow', continued=continued, ofdm_model=ofdm_model)  # papr_method:none\pow\papr
-    history = T.train_loop(epochs=5001, encoder=encoder, decoder=decoder, mapper=mapper)
+    T = Train(data=data_set, lr=0.001, snr=snr, m=m, train_union=train_union, factor_trainable=factor_trainable,
+              mapping_method='pow', continued=continued, ofdm_model=ofdm_model)  # papr_method:none\pow\papr
+    history = T.train_loop(epochs=2001, decoder=decoder, mapper=mapper)
     Saver.save_model(encoder, decoder, mapper, data_set.train_data, qam_padding_bits_test,
-                     model_save_path=ofdm_papr_model_save_path, result_save_path=result_save_path)
+                     model_save_path=model_save_path, result_save_path=result_save_path)
     Saver.save_result(result_save_path, qam_padding_bits, qam_padding_bits_test)
     Saver.save_class_element(T, "regularization_factor", "../data/class_element/regularization_factor.pkl")
     Saver.save_history("../data/history.json", history)
 
 
 if __name__ == "__main__":
-    main()
+    # TODO：
+    #  1.优化papr
+    #  2.papr的自适应MTL表达式
+    with tf.device('/CPU:0'):
+        main()

@@ -83,7 +83,8 @@ class LDPCEncode:
         data = qam_process(self.__m, np.mod(np.matmul(self.bits, self.__g), 2))
         if model_name == 'mlp':
             data = data.reshape(-1, self.__m).astype('float32')
-        return data
+        padding = np.zeros((OFDMParameters.fft_num.value - data.shape[0]%OFDMParameters.fft_num.value, self.__m))
+        return np.concatenate((data, padding), axis=0)
 
     def decode(self, data, model_name='mlp'):
         if model_name == 'mlp':
@@ -101,7 +102,7 @@ class LDPCEncode:
 def model_load(model_path: Model_save_path):
     mapper = tf.saved_model.load(model_path.mapper_save_path)
     encoder = tf.saved_model.load(model_path.encoder_save_path)
-    decoder = tf.saved_model.load(model_path.decoder_save_path)
+    decoder = keras.models.load_model(model_path.decoder_save_path)
     return encoder, decoder, mapper
 
 
@@ -124,9 +125,9 @@ class Saver:
         sio.savemat(result_save_path.mapper_test_pre, {'mapper_test_result': mapper_test_pre.numpy()})
         sio.savemat(result_save_path.decoder_train_pre, {'decoder_train_result': decoder_train_pre.numpy()})
         sio.savemat(result_save_path.decoder_test_pre, {'decoder_test_result': decoder_test_pre.numpy()})
-        make_dirs(model_save_path, "../my_model/")
+        make_dirs(model_save_path, "../my_model8/")
         tf.saved_model.save(encoder, model_save_path.encoder_save_path)
-        tf.saved_model.save(decoder, model_save_path.decoder_save_path)
+        keras.models.save_model(decoder, model_save_path.decoder_save_path)
         tf.saved_model.save(mapper, model_save_path.mapper_save_path)
 
     @classmethod

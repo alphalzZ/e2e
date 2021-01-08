@@ -19,24 +19,31 @@ import tensorflow as tf
 def validation_one():
     gh_path = GH_PATH(r'D:\LYJ\AutoEncoder-Based-Communication-System-master\matlab_code\genarateH G\G.mat',
                       r'D:\LYJ\AutoEncoder-Based-Communication-System-master\matlab_code\genarateH G\H.mat')
-    model_load_path = Model_save_path(r'../my_model/mlp_encoder', r'../my_model/mlp_decoder',
-                                      r'../my_model/mlp_mapper')
-    ofdm_model_load_path = Model_save_path(r'../my_model/mlp_ofdm_encoder', r'../my_model/mlp_ofdm_decoder',
-                                           r'../my_model/mlp_ofdm_mapper')
+    fine_model = Model_save_path(r'../my_trained_model/mlp_ofdm_encoder_5000', r'../my_trained_model/mlp_ofdm_decoder_5000',
+                                           r'../my_trained_model/mlp_ofdm_mapper_5000')
+    model_load_path = Model_save_path(r'../my_model8/mlp_encoder', r'../my_model8/mlp_decoder',
+                                      r'../my_model8/mlp_mapper')
+    ofdm_model_load_path = Model_save_path(r'../my_model8/mlp_ofdm_encoder', r'../my_model8/mlp_ofdm_decoder',
+                                           r'../my_model8/mlp_ofdm_mapper')
+    ofdm_papr_model_load_path = Model_save_path(r'../my_model8/mlp_ofdm_papr_encoder',
+                                                r'../my_model8/mlp_ofdm_papr_decoder',
+                                                r'../my_model8/mlp_ofdm_papr_mapper')
     g = load_mat(gh_path.g_path)['outputG']
-    m, bit_nums, channels = 4, 10000, 2  # 注意bit_nums应该与训练的时候大小一样
+    m, bit_nums, channels = 3, 10000, 2  # 注意bit_nums应该与训练的时候大小一样
     ldpc_encoder = LDPCEncode(g, m, bit_nums)
     qam_padding_bits_test = ldpc_encoder.encode(model_name='mlp')
     num_syms = qam_padding_bits_test.shape[0]
-    ofdm_model = 1
-    encoder, decoder, mapper = model_load(ofdm_model_load_path if ofdm_model else model_load_path)
+    ofdm_model = 0
+    encoder, decoder, mapper = model_load(model_load_path)
     if ofdm_model:
         ofdm_ifft = OFDMModulation(num_syms, name='ofdm')
         ofdm_fft = OFDMDeModulation(num_syms // OFDMParameters.fft_num.value * OFDMParameters.ofdm_syms.value)
-    history = {'snr': [], 'ber': []}
-    for snr in range(1, 25):
+    history = {'snr': [], 'ber': [], 'papr': []}
+    for snr in range(10, 35):
         channel = GaussianNoise(snr, ofdm_model=ofdm_model, num_sym=80, nbps=m, num_syms=num_syms)
+        papr_esitimator = PAPRConstraint(num_syms, snr)
         mapping = encoder(qam_padding_bits_test)
+        papr = papr_esitimator(mapping, mapping).numpy()
         if ofdm_model:
             mapping = ofdm_ifft(mapping)
         received = channel(mapping)
@@ -52,10 +59,13 @@ def validation_one():
             plt.show()
         history['snr'].append(snr)
         history['ber'].append(ber)
+        history['papr'].append(papr)
     plt.figure()
-    plt.semilogy(history['snr'], history['ber'], 'ko')
+    plt.semilogy(history['snr'], history['ber'], 'k.-')
     plt.show()
-    print(history['ber'])
+    plt.figure()
+    plt.plot(history['snr'], history['papr'], 'r--')
+    plt.show()
 
 
 if __name__ == "__main__":

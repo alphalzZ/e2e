@@ -48,7 +48,7 @@ class PAPRConstraint(losses.Loss):
         mean_pow = tf.reduce_mean(signal_power, axis=0)
         max_pow = tf.reduce_max(signal_power, axis=0)
         papr_vector = 10 * tf.math.log(max_pow / mean_pow)
-        papr = tf.reduce_mean(papr_vector)  # reduce_sum or reduce_mean ?
+        papr = tf.reduce_max(papr_vector)  # reduce_sum or reduce_mean ?
         return papr
 
 
