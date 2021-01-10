@@ -36,21 +36,23 @@ class Models:
 
 class MLP:
     def __init__(self, m, constraint, channels, input_shape, ofdm_outshape, ofdm_model):
+        self.layers_num = 4 if m < 4 else m
         self.m = m
         self.channels = channels
+        self.constraint = constraint
         self.ofdm_model = ofdm_model
         self.input_shape = input_shape
         self.ofdm_outshape = ofdm_outshape
-        self.__encoder__layers = [layers.Dense(2**i, activation='elu') for i in range(self.m, 1, -1)]
-        self.__encoder_out = layers.Dense(self.channels, activation='elu')
-        self.__decoder_layers = [layers.Dense(2 ** i, activation='elu') for i in range(2, self.m + 1, 1)]
+        self.__encoder__layers = [layers.Dense(2**i, activation='elu') for i in range(self.layers_num, 1, -1)]
+        self.__encoder_out = layers.Dense(self.channels, activation='elu', name='encoder_out')
+        self.__decoder_layers = [layers.Dense(2 ** i, activation='elu') for i in range(2, self.layers_num + 1, 1)]
         self.__decoder_out = layers.Dense(self.m, activation='sigmoid')
         if constraint == 'pow':
             self.__normalize_layer = PowerNormalize(name='normalize')
         elif constraint == 'amp':
-            self.__normalize_layer = MappingLayer(name='normalize')
+            self.__normalize_layer = AmplitudeNormalize(name='normalize')
         else:
-            self.__normalize_layer = layers.BatchNormalization(name='normalize')
+            pass
         if ofdm_model:
             self.__ofdm_layer = OFDMModulation(self.input_shape, name='ofdm')
             self.__de_ofdm_layer = OFDMDeModulation(self.ofdm_outshape, name='deofdm')
@@ -61,7 +63,8 @@ class MLP:
         for layer in self.__encoder__layers:
             mapper.add(layer)
         mapper.add(self.__encoder_out)
-        mapper.add(self.__normalize_layer)
+        if self.constraint is not 'none':
+            mapper.add(self.__normalize_layer)
         if self.ofdm_model:
             mapper.add(self.__ofdm_layer)
             mapper.add(noise_layer)
@@ -72,7 +75,7 @@ class MLP:
         return mapper
 
     def decoder(self):
-        decoder = keras.Sequential([layers.InputLayer(input_shape=(2,))], name="decoder")
+        decoder = keras.Sequential([layers.InputLayer(input_shape=(self.channels,))], name="decoder")
         for layer in self.__decoder_layers:
             decoder.add(layer)
         decoder.add(self.__decoder_out)
@@ -80,8 +83,7 @@ class MLP:
         return decoder
 
     def channel(self, snr):
-        noise_layer = GaussianNoise(snr=snr, num_syms=self.input_shape,
-                                    ofdm_model=self.ofdm_model, num_sym=80, nbps=self.m, name='noise')
+        noise_layer = MyGaussianNoise(snr=snr, nbps=self.m, num_syms=self.input_shape, ofdm_model=self.ofdm_model, name='noise_layer')
         return noise_layer
 
     def get_model(self, snr):
@@ -92,8 +94,10 @@ class MLP:
         """
         mapper = self.mapper(snr)
         decoder = self.decoder()
-        encoder = keras.Model(inputs=mapper.inputs, outputs=mapper.get_layer(name='normalize').output, name='encoder')
-        mapper.summary()
+        encoder = keras.Model(inputs=mapper.inputs,
+                              outputs=mapper.get_layer(name='normalize').output if self.constraint is not 'none'
+                              else mapper.get_layer(name='encoder_out').output, name='encoder')
+        encoder.summary()
         return encoder, decoder, mapper
 
 

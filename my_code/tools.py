@@ -46,10 +46,14 @@ def load_mat(path):
     return data
 
 
-def plot(hist, start):
+def plot(hist:History, start):
     plt.figure()
     plt.plot(hist.epoch[start:], hist.loss[start:], label="loss")
     plt.plot(hist.epoch[start:], hist.val_loss[start:], label="val_loss")
+    plt.legend()
+    plt.figure()
+    plt.plot(hist.epoch[start:], hist.papr[start:], label="papr")
+    plt.plot(hist.epoch[start:], hist.val_papr[start:], label="val_papr")
     plt.legend()
     plt.show()
 
@@ -100,8 +104,8 @@ class LDPCEncode:
 
 
 def model_load(model_path: Model_save_path):
-    mapper = tf.saved_model.load(model_path.mapper_save_path)
-    encoder = tf.saved_model.load(model_path.encoder_save_path)
+    mapper = keras.models.load_model(model_path.mapper_save_path)
+    encoder = keras.models.load_model(model_path.encoder_save_path)
     decoder = keras.models.load_model(model_path.decoder_save_path)
     return encoder, decoder, mapper
 
@@ -117,7 +121,7 @@ class Saver:
     @classmethod
     def save_model(cls, encoder, decoder, mapper, x_train, x_test,
                    model_save_path: Model_save_path, result_save_path:Result_save_path):
-        mapper_train_pre = mapper(x_train)  # 经过信道加完噪声
+        mapper_train_pre = mapper(x_train)
         mapper_test_pre = mapper(x_test)
         decoder_train_pre = decoder(mapper(x_train))
         decoder_test_pre = decoder(mapper(x_test))
@@ -126,9 +130,9 @@ class Saver:
         sio.savemat(result_save_path.decoder_train_pre, {'decoder_train_result': decoder_train_pre.numpy()})
         sio.savemat(result_save_path.decoder_test_pre, {'decoder_test_result': decoder_test_pre.numpy()})
         make_dirs(model_save_path, "../my_model8/")
-        tf.saved_model.save(encoder, model_save_path.encoder_save_path)
+        keras.models.save_model(encoder, model_save_path.encoder_save_path)
         keras.models.save_model(decoder, model_save_path.decoder_save_path)
-        tf.saved_model.save(mapper, model_save_path.mapper_save_path)
+        keras.models.save_model(mapper, model_save_path.mapper_save_path)
 
     @classmethod
     def save_result(cls, result_save_path: Result_save_path, train_bits, test_bits):
@@ -166,9 +170,10 @@ def make_dirs(save_path, target_path):
 
 
 class OFDMParameters(Enum):
-    guard_interval = 16
-    fft_num = 64
-    ofdm_syms = 80
+
+    fft_num = 256
+    guard_interval = fft_num//8
+    ofdm_syms = fft_num + guard_interval
 
 
 if __name__ == "__main__":

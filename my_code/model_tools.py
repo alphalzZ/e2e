@@ -4,6 +4,7 @@ import tensorflow as tf
 from tensorflow.python.keras import backend as K
 from tensorflow.python.ops import array_ops
 from tensorflow.keras import layers, losses, metrics
+from my_code.tools import OFDMParameters
 print('Tensorflow version:{}'.format(tf.__version__))
 
 
@@ -17,13 +18,14 @@ class MappingConstraint(losses.Loss):
         self.mapping_method = mapping_method
 
     def call(self, y_pred, y_true):
-        constraint = 0.
         if self.mapping_method == 'papr':
             amplitude = tf.math.square(y_pred[:, 0]) + tf.math.square(y_pred[:, 1])
             papr_constraint = tf.math.reduce_max(amplitude)/tf.math.reduce_mean(amplitude)
             constraint = papr_constraint
         elif self.mapping_method == 'pow':
             constraint = tf.reduce_mean(tf.square(y_pred))
+        else:
+            constraint = 0.
         return constraint
 
     def get_config(self):
@@ -32,12 +34,13 @@ class MappingConstraint(losses.Loss):
 
 class PAPRConstraint(losses.Loss):
     """num_syms: 符号个数总数"""
-    def __init__(self, num_syms, snr, num_fft=64, num_guard=16, name="papr_constraint_loss"):
+    def __init__(self, num_syms, snr, num_fft=OFDMParameters.fft_num.value,
+                 num_guard=OFDMParameters.guard_interval.value, name="papr_constraint_loss"):
         super().__init__(name=name)
         self.num_fram = num_syms // num_fft
         self.num_ofdm_length = num_fft + num_guard
         self.__ofdm_layer = OFDMModulation(num_syms)
-        self.__noise_layer = GaussianNoise(snr, ofdm_model=1, num_syms=num_syms)
+        self.__noise_layer = MyGaussianNoise(snr, ofdm_model=1, num_syms=num_syms)
 
     def call(self, y_true, y_pred):
         ofdm_shape = (self.num_fram, self.num_ofdm_length)  # （子载波数量，ofdm符号个数）
@@ -45,19 +48,19 @@ class PAPRConstraint(losses.Loss):
         ofdm_signal_complex = tf.complex(ofdm_signal_iq[:, 0], ofdm_signal_iq[:, 1])
         ofdm_signal = tf.reshape(ofdm_signal_complex, ofdm_shape)
         signal_power = tf.square(tf.math.real(tf.multiply(ofdm_signal, tf.math.conj(ofdm_signal))))
-        mean_pow = tf.reduce_mean(signal_power, axis=0)
-        max_pow = tf.reduce_max(signal_power, axis=0)
+        mean_pow = tf.reduce_mean(signal_power, axis=1)
+        max_pow = tf.reduce_max(signal_power, axis=1)
         papr_vector = 10 * tf.math.log(max_pow / mean_pow)
-        papr = tf.reduce_max(papr_vector)  # reduce_sum or reduce_mean ?
+        papr = tf.reduce_mean(papr_vector)  # reduce_sum or reduce_mean ?
         return papr
 
 
-class MappingLayer(layers.Layer):
+class AmplitudeNormalize(layers.Layer):
     """
     amplitude constraint
     """
     def __init__(self, channel=2, units=None, **kwargs):
-        super(MappingLayer, self).__init__(**kwargs)
+        super(AmplitudeNormalize, self).__init__(**kwargs)
         self.units = units
         self.channel = channel
 
@@ -86,15 +89,15 @@ class PowerNormalize(layers.Layer):
         return {"units": self.units}
 
 
-class GaussianNoise(layers.Layer):
+class MyGaussianNoise(layers.Layer):
     """
     Gaussian Noise Layer
     SNR(dB) = 20×log10(1/ noise_std)
     noise_std = mean_pow/10**(snr/20)
     """
-    def __init__(self, snr, ofdm_model, num_syms, num_sym=80, nbps=4, **kwargs):
+    def __init__(self, snr, ofdm_model, num_syms, num_sym=OFDMParameters.ofdm_syms.value, nbps=4, **kwargs):
         """num_sym:一个ofdm信号的长度"""
-        super(GaussianNoise, self).__init__(**kwargs)
+        super(MyGaussianNoise, self).__init__(**kwargs)
         self.snr = snr
         self.ofdm_model = ofdm_model
         self.num_sym = num_sym  # 一帧ofdm信号符号个数
@@ -111,20 +114,16 @@ class GaussianNoise(layers.Layer):
             noise_std = tf.sqrt(10.**(-snrs/10.) * tf.math.real(mean_pow)/2.)
         else:  # TODO debug add noise
             mean_pow = tf.reduce_mean(tf.reduce_sum(tf.square(inputs), axis=1))**0.5
-            noise_std = mean_pow/(10.**(self.snr/20.))
+            noise_std = (mean_pow/(10.**(2.*0.834*self.snr/10.)))**0.5  # np.sqrt(mean_pow/(2*R*EbNo))? R = Gr/Gc = 0.834
         noise = tf.random.normal(shape=array_ops.shape(inputs), mean=0., stddev=noise_std)
         return inputs + noise
 
-    def get_config(self):
-        config = super(GaussianNoise, self).get_config()
-        config.update({'snr': self.snr, 'ofdm_model': self.ofdm_model, 'num_sym':self.num_sym,
-                       'num_syms': self.num_syms, 'nbps':self.nbps})
-        return config
-
 
 class OFDMModulation(layers.Layer):
-    def __init__(self, num_sym, num_gard=16, num_fft=64, **kwargs):
+    def __init__(self, num_sym, num_gard=OFDMParameters.guard_interval.value,
+                 num_fft=OFDMParameters.fft_num.value, **kwargs):
         """保护间隔个数， fft个数， 每一帧ofdm符号个数等于num_gard+num_fft， 帧数等于符号个数除以num_fft"""
+        #  TODO 子载波个数 <= ifft点数
         super(OFDMModulation, self).__init__(**kwargs)
         self.num_gard, self.num_fft = num_gard, num_fft
         self.num_sym = num_sym
@@ -148,7 +147,8 @@ class OFDMModulation(layers.Layer):
 
 
 class OFDMDeModulation(layers.Layer):
-    def __init__(self, ofdm_outshape, num_gard=16, num_fft=64, **kwargs):
+    def __init__(self, ofdm_outshape, num_gard=OFDMParameters.guard_interval.value,
+                 num_fft=OFDMParameters.fft_num.value, **kwargs):
         """保护间隔个数， fft个数， 每一帧ofdm符号个数等于num_gard+num_fft， 帧数等于符号个数除以num_fft"""
         super(OFDMDeModulation, self).__init__(**kwargs)
         self.num_gard, self.num_fft = num_gard, num_fft
