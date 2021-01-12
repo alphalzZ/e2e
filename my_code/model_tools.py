@@ -59,16 +59,15 @@ class AmplitudeNormalize(layers.Layer):
     """
     amplitude constraint
     """
-    def __init__(self, channel=2, units=None, **kwargs):
+    def __init__(self, channel=2, **kwargs):
         super(AmplitudeNormalize, self).__init__(**kwargs)
-        self.units = units
         self.channel = channel
 
     def call(self, inputs):
         return tf.math.l2_normalize(inputs, axis=1)
 
     def get_config(self):
-        return {"units": self.units, "channel": self.channel}
+        return {"channel": self.channel}
 
 
 class PowerNormalize(layers.Layer):
@@ -76,9 +75,8 @@ class PowerNormalize(layers.Layer):
     average power constraint
     TODO debug power constraint
     """
-    def __init__(self, units=None, **kwargs):
+    def __init__(self, **kwargs):
         super(PowerNormalize, self).__init__(**kwargs)
-        self.units = units
 
     def call(self, inputs):
         norm_factor = (1./tf.reduce_mean(tf.reduce_sum(tf.square(inputs), axis=1)))**0.5
@@ -86,7 +84,7 @@ class PowerNormalize(layers.Layer):
         return normalize_power
 
     def get_config(self):
-        return {"units": self.units}
+        return super(PowerNormalize, self).get_config()
 
 
 class MyGaussianNoise(layers.Layer):

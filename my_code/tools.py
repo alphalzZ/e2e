@@ -91,9 +91,10 @@ class LDPCEncode:
             data = data.reshape(-1)
             padding = np.zeros(OFDMParameters.fft_num.value//16*self.__m -
                                      data.shape[0]%(OFDMParameters.fft_num.value//16*self.__m),)
-            data = np.concatenate((data, padding))
-            data = data.reshape(OFDMParameters.fft_num.value//16, -1, self.__m).astype('float32')
-            return data
+            data0 = np.concatenate((data, padding))
+            padding = np.zeros(11520-data0.shape[0],)  # debug
+            data = np.concatenate((data0, padding))
+            return data.reshape(OFDMParameters.fft_num.value//16, -1, self.__m).astype('float32')  # batch, k, m
         padding = np.zeros((OFDMParameters.fft_num.value - data.shape[0]%OFDMParameters.fft_num.value, self.__m))
         return np.concatenate((data, padding), axis=0)
 

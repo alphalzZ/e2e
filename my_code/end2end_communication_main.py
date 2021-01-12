@@ -10,14 +10,12 @@ gpu_options = tf.compat.v1.GPUOptions(per_process_gpu_memory_fraction=0.5)
 
 class Train:
     def __init__(self, data: Data, lr, m, snr, opt="adam", continued=0, factor_trainable=1, train_union=0,
-                 label_transform=False, mse=False, mapping_method='none', ofdm_model=0, reset_regular_factor=0):
+                 mapping_method='none', ofdm_model=0, reset_regular_factor=0, model_name='mlp'):
         """
         损失函数用两种方法度量，binary_cross_entropy和mse以及其他基于llr的度量方法
         papr约束和mse使用自适应多任务学习方法
         """
-        self.mse = mse
         self.data = data
-        self.label_transform = label_transform
         self.factor_trainable = factor_trainable
         self.train_union = train_union
         self.__m = m
@@ -28,8 +26,7 @@ class Train:
             self.optimizer = keras.optimizers.SGD(lr=lr)
         else:
             self.optimizer = keras.optimizers.Ftrl(lr=lr)
-        self.prime_loss = keras.losses.MeanSquaredError() if mse \
-            else keras.losses.BinaryCrossentropy()
+        self.prime_loss = keras.losses.BinaryCrossentropy()
         self.mapping_loss = MappingConstraint(mapping_method)
         self.binary_cross_entropy_metrics = keras.metrics.BinaryCrossentropy()
         self.binary_accuracy_metrics = keras.metrics.BinaryAccuracy()
@@ -50,17 +47,16 @@ class Train:
                                           tf.Variable(1., trainable=factor_trainable),
                                           tf.Variable(1., trainable=factor_trainable)]
         if ofdm_model:
-            self.papr_loss = PAPRConstraint(num_syms=data[0].shape[0], snr=snr)
+            if model_name == 'mlp':
+                self.papr_loss = PAPRConstraint(num_syms=data[0].shape[0], snr=snr)
+            if model_name == 'conv1d':
+                self.papr_loss = PAPRConstraint(num_syms=data[0].shape[0]*data[0].shape[1], snr=snr)
 
     def train_loop(self, epochs, encoder, decoder, mapper):
         history = History([], [], [], [], [], [], [])
         x_train, y_train, x_val, y_val = list(map(lambda x: tf.convert_to_tensor(x), self.data))
-        if self.mse and self.label_transform:
-            y_train = 16 * y_train - 8
-            y_val = 16 * y_val - 8
-        if not self.mse:
-            y_train = tf.cast(y_train, tf.int32)
-            y_val = tf.cast(y_val, tf.int32)
+        y_train = tf.cast(y_train, tf.int32)
+        y_val = tf.cast(y_val, tf.int32)
         for epoch in range(epochs):
             train_loss, train_accuracy, train_papr = self.__train_step(encoder, decoder, mapper, x_train, y_train)
             mapping = encoder(x_val)
@@ -119,7 +115,7 @@ def main():
                       r'D:\LYJ\AutoEncoder-Based-Communication-System-master\matlab_code\genarateH G\H.mat')
     g = load_mat(gh_path.g_path)['outputG']
     h = load_mat(gh_path.h_path)['outputH']
-    m, bit_nums, snr_ebn0, channels = 3, 10000, 10, 2  # 表示一帧数据
+    m, bit_nums, snr_ebn0, channels = 3, 10000, 10, 2
     result_save_path = Result_save_path(r'../result_data/%dsnr_encoder_train_mapping.mat' % 23,
                                         r'../result_data/%dsnr_encoder_test_mapping.mat' % 23,
                                         r'../result_data/%dsnr_decoder_train_recover.mat' % 23,
@@ -144,14 +140,14 @@ def main():
     data_set = Data(qam_padding_bits, qam_padding_bits, qam_padding_bits_val, qam_padding_bits_val)
     num_signals, k = qam_padding_bits.shape[0], int(qam_padding_bits.shape[1] // m)
     input_shape = qam_padding_bits_test.shape if model_name == 'conv1d' else num_signals
-    continued, ofdm_model, train_union = 1, 0, 0  # ofdm 模式下需要先训练ber，再训练papr（0,1,0）-->（1,1,1）
+    continued, ofdm_model, train_union = 0, 1, 0  # ofdm 模式下需要先训练ber，再训练papr（0,1,0）-->（1,1,1）
     factor_trainable = 0
     constraint, mapping_method = 'pow', 'pow'
     model_load_path = ofdm_conv_model_save_path
     model_save_path = ofdm_conv_model_save_path
     if continued:
         encoder, decoder, mapper = model_load(model_path=model_load_path)
-        if train_union:  # 冻结decoder
+        if train_union and model_name == 'mlp':  # 冻结decoder
             for layer in decoder.layers[:2]:
                 layer.trainable = False
     else:
@@ -160,8 +156,8 @@ def main():
                                                input_shape=input_shape,
                                                ofdm_outshape=num_signals // OFDMParameters.fft_num.value * OFDMParameters.ofdm_syms.value)
     T = Train(data=data_set, lr=0.001, snr=snr_ebn0, m=m, train_union=train_union, factor_trainable=factor_trainable,
-              mapping_method=mapping_method, continued=continued, ofdm_model=ofdm_model)  # papr_method:none\pow\papr
-    history = T.train_loop(epochs=10001, encoder=encoder, decoder=decoder, mapper=mapper)
+              mapping_method=mapping_method, continued=continued, ofdm_model=ofdm_model, model_name=model_name)  # papr_method:none\pow\papr
+    history = T.train_loop(epochs=5001, encoder=encoder, decoder=decoder, mapper=mapper)
     if model_name == 'mlp':
         encoder = keras.Model(inputs=mapper.inputs,
                               outputs=mapper.get_layer(name='normalize').output if constraint is not 'none'

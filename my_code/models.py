@@ -14,7 +14,7 @@ class Models:
         self.channels = channels
         self.encoder = None
         self.decoder = None
-        self.mapping_model = None
+        self.mapper = None
 
     def get_model(self, model_name, snr, input_shape, ofdm_outshape, ofdm_model):
         if model_name == 'mlp':
@@ -26,8 +26,11 @@ class Models:
         elif model_name == 'conv1d':
             #  input_shape: (batch_size, num_symbols, m)
             self.encoder = Conv1dEncoder(input_shape, self.channels)
-            self.mapper = Mapper(input_shape, ofdm_model, snr)
+            self.mapper = Mapper(input_shape, ofdm_model, snr, self.constraint)
             self.decoder = Conv1dDecoder(input_shape[1], self.m, self.channels)
+            # self.encoder.summary()
+            # self.decoder.summary()
+            # self.mapper.summpary()
         elif model_name == 'gan':
             pass
         elif model_name == 'autoencoder':
@@ -108,12 +111,13 @@ class Conv1dEncoder(keras.Model):
     def __init__(self, input_dim, channels):
         #  input_dim: (batch_size, time_step, length)-->(batch_size, num_symbols, m)
         super(Conv1dEncoder, self).__init__()
-        self.conv1d1 = layers.Conv1D(2*channels, 3, padding='same', activation='elu', input_shape=input_dim[1:], name='cnv1')
-        self.conv1d2 = layers.Conv1D(channels, 3, padding='same', activation='elu', name='cnv2')
+        self.conv1d1 = layers.Conv1D(2*channels, 1, padding='same', activation='elu', input_shape=input_dim[1:], name='cnv1')
+        self.conv1d2 = layers.Conv1D(channels, 1, padding='same', activation='elu', name='encoder_out')
 
     def call(self, inputs):
-        out = self.conv1d2(self.conv1d1(inputs))
-        return tf.reshape(out, (-1, 2))
+        out1 = self.conv1d1(inputs)
+        out2 = self.conv1d2(out1)
+        return tf.reshape(out2, (-1, 2))
 
     def get_config(self):
         return super(Conv1dEncoder, self).get_config()
@@ -124,9 +128,9 @@ class Conv1dDecoder(keras.Model):
         #  input_dim: batch_size, num_symbols, channels
         super(Conv1dDecoder, self).__init__()
         self.in_dim = (-1, syms, channels)
-        self.conv1d1 = keras.layers.Conv1D(channels, 3, padding='same', activation='elu', input_shape=self.in_dim[1:])
-        self.conv1d2 = keras.layers.Conv1D(2*channels, 3, padding='same', activation='elu')
-        self.conv1d3 = keras.layers.Conv1D(m, 3, padding='same', activation='elu')
+        self.conv1d1 = keras.layers.Conv1D(channels, 1, padding='same', activation='elu', input_shape=self.in_dim[1:])
+        self.conv1d2 = keras.layers.Conv1D(2*channels, 1, padding='same', activation='elu')
+        self.conv1d3 = keras.layers.Conv1D(m, 1, padding='same', activation='sigmoid')
 
     def call(self, inputs):
         inputs = tf.reshape(inputs, self.in_dim)  # (-1,236,2)
@@ -142,19 +146,26 @@ class Conv1dDecoder(keras.Model):
 
 
 class Mapper(keras.Model):
-    def __init__(self, input_shape, ofdm_model, snr):
+    def __init__(self, input_shape, ofdm_model, snr, constraint):
         super(Mapper, self).__init__()
         num_syms = input_shape[0] * input_shape[1]
         m = input_shape[2]
         self.ofdm_model = ofdm_model
+        self.constraint = constraint
         ofdm_outshape = num_syms // OFDMParameters.fft_num.value * OFDMParameters.ofdm_syms.value
         self.encoder = Conv1dEncoder(input_dim=input_shape, channels=2)
         self.ofdm_ifft = OFDMModulation(num_syms)
         self.noise_layer = MyGaussianNoise(snr=snr, ofdm_model=ofdm_model, num_syms=num_syms, nbps=m)
         self.ofdm_fft = OFDMDeModulation(ofdm_outshape)
+        if constraint == 'pow':
+            self.__normalize_layer = PowerNormalize(name='normalize')
+        elif constraint == 'amp':
+            self.__normalize_layer = AmplitudeNormalize(name='normalize')
 
     def call(self, inputs):
         encoded = self.encoder(inputs)
+        if self.constraint is not 'none':
+            encoded = self.__normalize_layer(encoded)
         if self.ofdm_model:
             encoded = self.ofdm_ifft(encoded)
         out = self.noise_layer(encoded)
@@ -164,7 +175,7 @@ class Mapper(keras.Model):
 
     def get_config(self):
         config = super(Mapper, self).get_config()
-        config.update({'ofdm_model': self.ofdm_model})
+        config.update({'ofdm_model': self.ofdm_model, 'constraint': self.constraint})
         return config
 
 
