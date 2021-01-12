@@ -132,20 +132,23 @@ def main():
                                            r'../my_model8/mlp_ofdm_mapper')
     ofdm_papr_model_save_path = Model_save_path(r'../my_model8/mlp_ofdm_papr_encoder', r'../my_model8/mlp_ofdm_papr_decoder',
                                            r'../my_model8/mlp_ofdm_papr_mapper')
-
+    ofdm_conv_model_save_path = Model_save_path(r'../my_model_conv/ofdm_encoder', r'../my_model_conv/ofdm_decoder',
+                                           r'../my_model_conv/ofdm_mapper')
+    model_name = 'conv1d'  # conv1d or mlp
     ldpc_encoder = LDPCEncode(g, m, bit_nums)
-    qam_padding_bits = ldpc_encoder.encode(model_name='mlp')  # 随机比特流数据作为训练数据
-    qam_padding_bits_val = ldpc_encoder.encode(model_name='mlp')  # 生成验证数据
-    qam_padding_bits_test = ldpc_encoder.encode(model_name='mlp')  # 测试数据
+    qam_padding_bits = ldpc_encoder.encode(model_name=model_name)  # 随机比特流数据作为训练数据
+    qam_padding_bits_val = ldpc_encoder.encode(model_name=model_name)  # 生成验证数据
+    qam_padding_bits_test = ldpc_encoder.encode(model_name=model_name)  # 测试数据
     print("training data shape: {}".format(qam_padding_bits.shape))
     original_bits = ldpc_encoder.bits
     data_set = Data(qam_padding_bits, qam_padding_bits, qam_padding_bits_val, qam_padding_bits_val)
     num_signals, k = qam_padding_bits.shape[0], int(qam_padding_bits.shape[1] // m)
-    continued, ofdm_model, train_union = 1, 1, 1  # ofdm 模式下需要先训练ber，再训练papr（0,1,0）-->（1,1,1）
-    factor_trainable = 1
+    input_shape = qam_padding_bits_test.shape if model_name == 'conv1d' else num_signals
+    continued, ofdm_model, train_union = 1, 0, 0  # ofdm 模式下需要先训练ber，再训练papr（0,1,0）-->（1,1,1）
+    factor_trainable = 0
     constraint, mapping_method = 'pow', 'pow'
-    model_load_path = ofdm_model_save_path
-    model_save_path = ofdm_papr_model_save_path
+    model_load_path = ofdm_conv_model_save_path
+    model_save_path = ofdm_conv_model_save_path
     if continued:
         encoder, decoder, mapper = model_load(model_path=model_load_path)
         if train_union:  # 冻结decoder
@@ -153,15 +156,18 @@ def main():
                 layer.trainable = False
     else:
         M = Models(m=m, constraint=constraint, channels=2)  # constraint:power or amplitude
-        encoder, decoder, mapper = M.get_model(model_name='mlp', snr=snr_ebn0, ofdm_model=ofdm_model,
-                                               input_shape=num_signals,
+        encoder, decoder, mapper = M.get_model(model_name=model_name, snr=snr_ebn0, ofdm_model=ofdm_model,
+                                               input_shape=input_shape,
                                                ofdm_outshape=num_signals // OFDMParameters.fft_num.value * OFDMParameters.ofdm_syms.value)
     T = Train(data=data_set, lr=0.001, snr=snr_ebn0, m=m, train_union=train_union, factor_trainable=factor_trainable,
               mapping_method=mapping_method, continued=continued, ofdm_model=ofdm_model)  # papr_method:none\pow\papr
-    history = T.train_loop(epochs=1001, encoder=encoder, decoder=decoder, mapper=mapper)
-    encoder = keras.Model(inputs=mapper.inputs,
-                          outputs=mapper.get_layer(name='normalize').output if constraint is not 'none'
-                          else mapper.get_layer(name='encoder_out').output, name='encoder')
+    history = T.train_loop(epochs=10001, encoder=encoder, decoder=decoder, mapper=mapper)
+    if model_name == 'mlp':
+        encoder = keras.Model(inputs=mapper.inputs,
+                              outputs=mapper.get_layer(name='normalize').output if constraint is not 'none'
+                              else mapper.get_layer(name='encoder_out').output, name='encoder')
+    else:
+        encoder = mapper.encoder
     Saver.save_model(encoder, decoder, mapper, data_set.train_data, qam_padding_bits_test,
                      model_save_path=model_save_path, result_save_path=result_save_path)
     Saver.save_result(result_save_path, qam_padding_bits, qam_padding_bits_test)
@@ -173,5 +179,5 @@ if __name__ == "__main__":
     # TODO：
     #  1.优化papr
     #  2.papr的自适应MTL表达式
-    with tf.device('/GPU:0'):
+    with tf.device('/CPU:0'):
         main()

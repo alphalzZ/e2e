@@ -87,12 +87,22 @@ class LDPCEncode:
         data = qam_process(self.__m, np.mod(np.matmul(self.bits, self.__g), 2))
         if model_name == 'mlp':
             data = data.reshape(-1, self.__m).astype('float32')
+        if model_name == 'conv1d':
+            data = data.reshape(-1)
+            padding = np.zeros(OFDMParameters.fft_num.value//16*self.__m -
+                                     data.shape[0]%(OFDMParameters.fft_num.value//16*self.__m),)
+            data = np.concatenate((data, padding))
+            data = data.reshape(OFDMParameters.fft_num.value//16, -1, self.__m).astype('float32')
+            return data
         padding = np.zeros((OFDMParameters.fft_num.value - data.shape[0]%OFDMParameters.fft_num.value, self.__m))
         return np.concatenate((data, padding), axis=0)
 
     def decode(self, data, model_name='mlp'):
         if model_name == 'mlp':
             return data.reshape(-1, self.__g.shape[1])
+        if model_name == 'conv1d':
+            pass
+
 
     def __bits_process(self, bits: np.ndarray):
         length = bits.shape[0]
@@ -129,7 +139,7 @@ class Saver:
         sio.savemat(result_save_path.mapper_test_pre, {'mapper_test_result': mapper_test_pre.numpy()})
         sio.savemat(result_save_path.decoder_train_pre, {'decoder_train_result': decoder_train_pre.numpy()})
         sio.savemat(result_save_path.decoder_test_pre, {'decoder_test_result': decoder_test_pre.numpy()})
-        make_dirs(model_save_path, "../my_model8/")
+        make_dirs(model_save_path, "../my_model_conv/")
         keras.models.save_model(encoder, model_save_path.encoder_save_path)
         keras.models.save_model(decoder, model_save_path.decoder_save_path)
         keras.models.save_model(mapper, model_save_path.mapper_save_path)
