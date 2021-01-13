@@ -172,8 +172,41 @@ class OFDMDeModulation(layers.Layer):
         return config
 
 
+class PRBatchnorm(layers.Layer):
+    """
+    A Novel PAPR Reduction Scheme for OFDM System based on Deep Learning
+    """
+    def __init__(self, trainable, **kwargs):
+        super(PRBatchnorm, self).__init__(**kwargs)
+        self.trainable = trainable
+
+    def build(self, input_shape):
+        """原文中是两个标量"""
+        self.gama = self.add_weight(
+            shape=(input_shape[1], ),
+            initializer=tf.initializers.constant(1.),
+            trainable=self.trainable,
+            name='gama'
+        )
+        self.beta = self.add_weight(
+            shape=(input_shape[1], ), initializer=tf.initializers.constant(0.001), trainable=self.trainable,
+            name='beta'
+        )
+
+    def call(self, inputs):
+        mean = tf.reduce_mean(inputs, axis=0)  # 每一列的均值
+        sigma = tf.math.reduce_variance(inputs, axis=0) # 每一列的方差
+        return tf.add(tf.multiply(self.gama, tf.subtract(inputs, mean)/tf.sqrt(tf.add(sigma, tf.constant(0.001)))), self.beta)
+        # return tf.add(tf.multiply(self.gama, inputs), self.beta)
+
+    def get_config(self):
+        return super(PRBatchnorm, self).get_config()
+
+
 if __name__ == "__main__":
     mapping_pre = np.random.randn(128, 2)
+    prbatchnorm = PRBatchnorm(True)
+    out0 = prbatchnorm(mapping_pre)
     papr_loss = MappingConstraint()
     loss = papr_loss(y_pred=mapping_pre, y_true=mapping_pre)
     m = MappingConstraint()

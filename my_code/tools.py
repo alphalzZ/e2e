@@ -147,7 +147,7 @@ class Saver:
         sio.savemat(result_save_path.mapper_test_pre, {'mapper_test_result': mapper_test_pre.numpy()})
         sio.savemat(result_save_path.decoder_train_pre, {'decoder_train_result': decoder_train_pre.numpy()})
         sio.savemat(result_save_path.decoder_test_pre, {'decoder_test_result': decoder_test_pre.numpy()})
-        make_dirs(model_save_path, "../my_model_conv/")
+        make_dirs(model_save_path, "../my_model8/")
         keras.models.save_model(encoder, model_save_path.encoder_save_path)
         keras.models.save_model(decoder, model_save_path.decoder_save_path)
         keras.models.save_model(mapper, model_save_path.mapper_save_path)

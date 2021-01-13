@@ -46,21 +46,21 @@ class Train:
         if reset_regular_factor:
             self.regularization_factor = [tf.Variable(1., trainable=factor_trainable),
                                           tf.Variable(1., trainable=factor_trainable),
-                                          tf.Variable(1., trainable=factor_trainable)]
+                                          tf.Variable(0.001, trainable=factor_trainable)]
         if ofdm_model:
             if model_name == 'mlp':
                 self.papr_loss = PAPRConstraint(num_syms=data[0].shape[0], snr=snr)
             if model_name == 'conv1d':
                 self.papr_loss = PAPRConstraint(num_syms=data[0].shape[0]*data[0].shape[1], snr=snr)
 
-    def train_loop(self, epochs, decoder, mapper, constraint):
+    def train_loop(self, epochs, decoder, mapper):
         history = History([], [], [], [], [], [], [])
         x_train, y_train, x_val, y_val = list(map(lambda x: tf.convert_to_tensor(x), self.data))
         y_train = tf.cast(y_train, tf.int32)
         y_val = tf.cast(y_val, tf.int32)
         for epoch in range(epochs):
-            train_loss, train_accuracy, train_papr = self.__train_step(decoder, mapper, x_train, y_train, constraint)
-            encoder = self.get_encoder(mapper, constraint)
+            train_loss, train_accuracy, train_papr = self.__train_step(decoder, mapper, x_train, y_train)
+            encoder = mapper.encoder
             mapping = encoder(x_val)
             val_pre = decoder(mapper(x_val))
             #  val metrics
@@ -84,7 +84,7 @@ class Train:
 
         return history
 
-    def __train_step(self, decoder, mapper, x_train, y_train, constraint):
+    def __train_step(self, decoder, mapper, x_train, y_train):
         with tf.GradientTape() as tape1:
             prediction = decoder(mapper(x_train))
             encoder = mapper.encoder
@@ -93,7 +93,7 @@ class Train:
             mapping_loss = self.mapping_loss(mapping, mapping)
             current_loss = 1 / (2 * self.regularization_factor[0] ** 2) * binary_loss + \
                            1 / (2 * self.regularization_factor[1] ** 2) * mapping_loss + \
-                           tf.math.log(reduce(lambda x, y: x * y ** 2, self.regularization_factor))
+                           tf.math.log(reduce(lambda x, y: x * y ** 2, self.regularization_factor[:-1]))
             train_papr = -1.
             if self.ofdm_model and self.train_union:  # ofdm训练ber
                 papr_loss = self.papr_loss(mapping, mapping)
@@ -143,11 +143,12 @@ def main():
     data_set = Data(qam_padding_bits, qam_padding_bits, qam_padding_bits_val, qam_padding_bits_val)
     num_signals, k = qam_padding_bits.shape[0], int(qam_padding_bits.shape[1] // m)
     input_shape = qam_padding_bits_test.shape if model_name == 'conv1d' else num_signals
-    continued, ofdm_model, train_union = 0, 1, 0  # ofdm 模式下需要先训练ber，再训练papr（0,1,0）-->（1,1,1）
+    epochs = 501
+    continued, ofdm_model, train_union = 1, 1, 1  # ofdm 模式下需要先训练ber，再训练papr（0,1,0）-->（1,1,1）
     factor_trainable = 0
-    constraint, mapping_method = 'pow', 'pow'
+    constraint, mapping_method = 'amp', 'pow'  # constraint: amp,pow; mapping_method: papr, none, pow
     model_load_path = ofdm_model_save_path
-    model_save_path = ofdm_model_save_path
+    model_save_path = ofdm_papr_model_save_path
     if continued:
         encoder, decoder, mapper = model_load(model_path=model_load_path)
         if train_union:  # 如果过度拟合decoder的话整体性能将会下降
@@ -157,14 +158,15 @@ def main():
             if model_name == 'conv1d':
                 decoder.conv1d1.trainable = False
                 decoder.conv1d2.trainable = False
+            mapper.encoder.normalize_layer.trainable = True
     else:
         M = Models(m=m, constraint=constraint, channels=2)  # constraint:power or amplitude
         encoder, decoder, mapper = M.get_model(model_name=model_name, snr=snr_ebn0, ofdm_model=ofdm_model,
                                                input_shape=input_shape,
                                                ofdm_outshape=num_signals // OFDMParameters.fft_num.value * OFDMParameters.ofdm_syms.value)
     T = Train(data=data_set, lr=0.001, snr=snr_ebn0, m=m, train_union=train_union, factor_trainable=factor_trainable,
-              mapping_method=mapping_method, continued=continued, ofdm_model=ofdm_model, model_name=model_name)  # papr_method:none\pow\papr
-    history = T.train_loop(epochs=10001, decoder=decoder, mapper=mapper, constraint=constraint)
+              mapping_method=mapping_method, continued=continued, ofdm_model=ofdm_model, model_name=model_name, reset_regular_factor=1)  # papr_method:none\pow\papr
+    history = T.train_loop(epochs=epochs, decoder=decoder, mapper=mapper)
     encoder = mapper.encoder
     Saver.save_model(encoder, decoder, mapper, data_set.train_data, qam_padding_bits_test,
                      model_save_path=model_save_path, result_save_path=result_save_path)

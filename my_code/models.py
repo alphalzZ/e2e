@@ -122,12 +122,14 @@ class MLPEncoder(keras.Model):
             self.normalize_layer = PowerNormalize(name='normalize')
         elif constraint == 'amp':
             self.normalize_layer = AmplitudeNormalize(name='normalize')
+        self.prnormalize_layer = PRBatchnorm(True, name='prbatchnorma')
 
     def call(self, inputs):
         x = self.encoder_in(inputs)
         for layer in self.encoder_layers:
             x = layer(x)
         x = self.encoder_out(x)
+        x = self.prnormalize_layer(x)
         if self.constraint is not 'none':
             x = self.normalize_layer(x)
         return x
