@@ -20,6 +20,7 @@ class Train:
         self.train_union = train_union
         self.__m = m
         self.ofdm_model = ofdm_model
+        self.model_name = model_name
         if opt == "adam":
             self.optimizer = keras.optimizers.Adam(lr=lr)
         elif opt == "sgd":
@@ -52,13 +53,14 @@ class Train:
             if model_name == 'conv1d':
                 self.papr_loss = PAPRConstraint(num_syms=data[0].shape[0]*data[0].shape[1], snr=snr)
 
-    def train_loop(self, epochs, encoder, decoder, mapper):
+    def train_loop(self, epochs, decoder, mapper, constraint):
         history = History([], [], [], [], [], [], [])
         x_train, y_train, x_val, y_val = list(map(lambda x: tf.convert_to_tensor(x), self.data))
         y_train = tf.cast(y_train, tf.int32)
         y_val = tf.cast(y_val, tf.int32)
         for epoch in range(epochs):
-            train_loss, train_accuracy, train_papr = self.__train_step(encoder, decoder, mapper, x_train, y_train)
+            train_loss, train_accuracy, train_papr = self.__train_step(decoder, mapper, x_train, y_train, constraint)
+            encoder = self.get_encoder(mapper, constraint)
             mapping = encoder(x_val)
             val_pre = decoder(mapper(x_val))
             #  val metrics
@@ -82,10 +84,11 @@ class Train:
 
         return history
 
-    def __train_step(self, encoder, decoder, mapper, x_train, y_train):
+    def __train_step(self, decoder, mapper, x_train, y_train, constraint):
         with tf.GradientTape() as tape1:
             prediction = decoder(mapper(x_train))
-            mapping = encoder(x_train)
+            encoder = mapper.encoder
+            mapping = encoder(x_train)  # TODO 是否反向传播到了
             binary_loss = self.prime_loss(y_train, prediction)
             mapping_loss = self.mapping_loss(mapping, mapping)
             current_loss = 1 / (2 * self.regularization_factor[0] ** 2) * binary_loss + \
@@ -130,7 +133,7 @@ def main():
                                            r'../my_model8/mlp_ofdm_papr_mapper')
     ofdm_conv_model_save_path = Model_save_path(r'../my_model_conv/ofdm_encoder', r'../my_model_conv/ofdm_decoder',
                                            r'../my_model_conv/ofdm_mapper')
-    model_name = 'conv1d'  # conv1d or mlp
+    model_name = 'mlp'  # conv1d or mlp
     ldpc_encoder = LDPCEncode(g, m, bit_nums)
     qam_padding_bits = ldpc_encoder.encode(model_name=model_name)  # 随机比特流数据作为训练数据
     qam_padding_bits_val = ldpc_encoder.encode(model_name=model_name)  # 生成验证数据
@@ -143,13 +146,17 @@ def main():
     continued, ofdm_model, train_union = 0, 1, 0  # ofdm 模式下需要先训练ber，再训练papr（0,1,0）-->（1,1,1）
     factor_trainable = 0
     constraint, mapping_method = 'pow', 'pow'
-    model_load_path = ofdm_conv_model_save_path
-    model_save_path = ofdm_conv_model_save_path
+    model_load_path = ofdm_model_save_path
+    model_save_path = ofdm_model_save_path
     if continued:
         encoder, decoder, mapper = model_load(model_path=model_load_path)
-        if train_union and model_name == 'mlp':  # 冻结decoder
-            for layer in decoder.layers[:2]:
-                layer.trainable = False
+        if train_union:  # 如果过度拟合decoder的话整体性能将会下降
+            if model_name == 'mlp':  # 冻结decoder
+                for layer in decoder.layers[:2]:
+                    layer.trainable = False
+            if model_name == 'conv1d':
+                decoder.conv1d1.trainable = False
+                decoder.conv1d2.trainable = False
     else:
         M = Models(m=m, constraint=constraint, channels=2)  # constraint:power or amplitude
         encoder, decoder, mapper = M.get_model(model_name=model_name, snr=snr_ebn0, ofdm_model=ofdm_model,
@@ -157,18 +164,13 @@ def main():
                                                ofdm_outshape=num_signals // OFDMParameters.fft_num.value * OFDMParameters.ofdm_syms.value)
     T = Train(data=data_set, lr=0.001, snr=snr_ebn0, m=m, train_union=train_union, factor_trainable=factor_trainable,
               mapping_method=mapping_method, continued=continued, ofdm_model=ofdm_model, model_name=model_name)  # papr_method:none\pow\papr
-    history = T.train_loop(epochs=5001, encoder=encoder, decoder=decoder, mapper=mapper)
-    if model_name == 'mlp':
-        encoder = keras.Model(inputs=mapper.inputs,
-                              outputs=mapper.get_layer(name='normalize').output if constraint is not 'none'
-                              else mapper.get_layer(name='encoder_out').output, name='encoder')
-    else:
-        encoder = mapper.encoder
+    history = T.train_loop(epochs=10001, decoder=decoder, mapper=mapper, constraint=constraint)
+    encoder = mapper.encoder
     Saver.save_model(encoder, decoder, mapper, data_set.train_data, qam_padding_bits_test,
                      model_save_path=model_save_path, result_save_path=result_save_path)
     Saver.save_result(result_save_path, qam_padding_bits, qam_padding_bits_test)
     Saver.save_class_element(T, "regularization_factor", "../data/class_element/regularization_factor.pkl")
-    Saver.save_history("../data/history.json", history)
+    Saver.save_history("../data/history_"+model_name+".json", history)
 
 
 if __name__ == "__main__":

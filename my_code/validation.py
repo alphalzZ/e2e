@@ -28,13 +28,15 @@ def validation_one():
     ofdm_papr_model_load_path = Model_save_path(r'../my_model8/mlp_ofdm_papr_encoder',
                                                 r'../my_model8/mlp_ofdm_papr_decoder',
                                                 r'../my_model8/mlp_ofdm_papr_mapper')
+    ofdm_conv_model_save_path = Model_save_path(r'../my_model_conv/ofdm_encoder', r'../my_model_conv/ofdm_decoder',
+                                           r'../my_model_conv/ofdm_mapper')
     g = load_mat(gh_path.g_path)['outputG']
     m, bit_nums, channels = 3, 10000, 2  # 注意bit_nums应该与训练的时候大小一样
     ldpc_encoder = LDPCEncode(g, m, bit_nums)
-    qam_padding_bits_test = ldpc_encoder.encode(model_name='mlp')
-    num_syms = qam_padding_bits_test.shape[0]
+    qam_padding_bits_test = ldpc_encoder.encode(model_name='conv1d')
+    num_syms = qam_padding_bits_test.shape[0]*qam_padding_bits_test.shape[1]
     ofdm_model = 1
-    encoder, decoder, mapper = model_load(ofdm_papr_model_load_path)
+    encoder, decoder, mapper = model_load(ofdm_conv_model_save_path)
     if ofdm_model:
         ofdm_ifft = OFDMModulation(num_syms, name='ofdm')
         ofdm_fft = OFDMDeModulation(num_syms // OFDMParameters.fft_num.value * OFDMParameters.ofdm_syms.value)

@@ -18,15 +18,19 @@ class Models:
 
     def get_model(self, model_name, snr, input_shape, ofdm_outshape, ofdm_model):
         if model_name == 'mlp':
-            model = MLP(m=self.m, constraint=self.constraint, ofdm_outshape=ofdm_outshape,
-                        channels=self.channels, ofdm_model=ofdm_model, input_shape=input_shape)
-            self.encoder, self.decoder, self.mapper = model.get_model(snr)
+            #  input_shape: (batch_size * num_symbols, m)
+            # model = MLP(m=self.m, constraint=self.constraint, ofdm_outshape=ofdm_outshape,
+            #             channels=self.channels, ofdm_model=ofdm_model, input_shape=input_shape)
+            # self.encoder, self.decoder, self.mapper = model.get_model(snr)
+            self.encoder = MLPEncoder(self.m, self.channels, self.constraint)
+            self.decoder = MLPDecoder(self.m, self.channels)
+            self.mapper = MLPMapper(self.m, self.channels, snr, self.constraint, ofdm_model, input_shape, ofdm_outshape)
         elif model_name == 'attention':
             pass
         elif model_name == 'conv1d':
             #  input_shape: (batch_size, num_symbols, m)
             self.encoder = Conv1dEncoder(input_shape, self.channels)
-            self.mapper = Mapper(input_shape, ofdm_model, snr, self.constraint)
+            self.mapper = ConvMapper(input_shape, ofdm_model, snr, self.constraint)
             self.decoder = Conv1dDecoder(input_shape[1], self.m, self.channels)
             # self.encoder.summary()
             # self.decoder.summary()
@@ -107,6 +111,73 @@ class MLP:
         return encoder, decoder, mapper
 
 
+class MLPEncoder(keras.Model):
+    def __init__(self, m, channels, constraint):
+        super(MLPEncoder, self).__init__()
+        self.constraint = constraint
+        self.encoder_in = layers.InputLayer(input_shape=(m,))
+        self.encoder_layers = [layers.Dense(2 ** i, activation='elu') for i in range(4 if m < 4 else m, 1, -1)]
+        self.encoder_out = layers.Dense(channels, activation='elu', name='encoder_out')
+        if constraint == 'pow':
+            self.normalize_layer = PowerNormalize(name='normalize')
+        elif constraint == 'amp':
+            self.normalize_layer = AmplitudeNormalize(name='normalize')
+
+    def call(self, inputs):
+        x = self.encoder_in(inputs)
+        for layer in self.encoder_layers:
+            x = layer(x)
+        x = self.encoder_out(x)
+        if self.constraint is not 'none':
+            x = self.normalize_layer(x)
+        return x
+
+    def get_config(self):
+        config = super(MLPEncoder, self).get_config()
+        config.update({'constraint': self.constraint})
+        return config
+
+
+class MLPDecoder(keras.Model):
+    def __init__(self, m, channels):
+        super(MLPDecoder, self).__init__()
+        self.decoder_in = layers.InputLayer(input_shape=(channels,))
+        self.decoder_layers = [layers.Dense(2 ** i, activation='elu') for i in range(2, 4 if m < 4 else m + 1, 1)]
+        self.decoder_out = layers.Dense(m, activation='sigmoid')
+
+    def call(self, inputs):
+        x = self.decoder_in(inputs)
+        for layer in self.decoder_layers:
+            x = layer(x)
+        return self.decoder_out(x)
+
+
+class MLPMapper(keras.Model):
+    def __init__(self, m, channels, snr, constraint, ofdm_model, input_syms, ofdm_out_syms):
+        super(MLPMapper, self).__init__()
+        self.ofdm_model = ofdm_model
+        self.encoder = MLPEncoder(m, channels, constraint)
+        if ofdm_model:
+            self.ofdm_layer = OFDMModulation(input_syms, name='ofdm')
+            self.de_ofdm_layer = OFDMDeModulation(ofdm_out_syms, name='deofdm')
+        self.noise_layer = MyGaussianNoise(snr=snr, nbps=m, num_syms=input_syms, ofdm_model=ofdm_model,
+                                      name='noise_layer')
+
+    def call(self, inputs):
+        x = self.encoder(inputs)
+        if self.ofdm_model:
+            x = self.ofdm_layer(x)
+            x = self.noise_layer(x)
+            x = self.de_ofdm_layer(x)
+        else:
+            x = self.noise_layer(x)
+        return x
+
+    def get_config(self):
+        return {'ofdm_model': self.ofdm_model}
+
+
+
 class Conv1dEncoder(keras.Model):
     def __init__(self, input_dim, channels):
         #  input_dim: (batch_size, time_step, length)-->(batch_size, num_symbols, m)
@@ -145,9 +216,9 @@ class Conv1dDecoder(keras.Model):
         return cls(**config)
 
 
-class Mapper(keras.Model):
+class ConvMapper(keras.Model):
     def __init__(self, input_shape, ofdm_model, snr, constraint):
-        super(Mapper, self).__init__()
+        super(ConvMapper, self).__init__()
         num_syms = input_shape[0] * input_shape[1]
         m = input_shape[2]
         self.ofdm_model = ofdm_model
@@ -174,7 +245,7 @@ class Mapper(keras.Model):
         return out
 
     def get_config(self):
-        config = super(Mapper, self).get_config()
+        config = super(ConvMapper, self).get_config()
         config.update({'ofdm_model': self.ofdm_model, 'constraint': self.constraint})
         return config
 
@@ -187,7 +258,7 @@ class Conv1dAE(keras.Model):
                  m, snr, channels, name='Conv1dAE', **kwargs):
         super(Conv1dAE, self).__init__(name, **kwargs)
         self.encoder = Conv1dEncoder(input_dim, channels)
-        self.mapper = Mapper(input_shape, ofdm_model, snr)
+        self.mapper = ConvMapper(input_shape, ofdm_model, snr)
         self.decoder = Conv1dDecoder(syms, m, channels)
 
     def call(self, inputs):
@@ -195,6 +266,13 @@ class Conv1dAE(keras.Model):
 
 
 def main():
+    train_data = np.random.randint(0, 2, (3328, 3))
+    mlp_mapper = MLPMapper(3, 2, 13, 'pow', 1, 3328, 3328//256*288)
+    y = mlp_mapper(train_data)
+    print('mlp_mapper_out:{}'.format(y.shape))
+    mlp_decoder = MLPDecoder(3, 2)
+    z = mlp_decoder(y)
+    print('mlp_decoder_out:{}'.format(z.shape))
     ###################  mlp  ###############
 
     # train_data = np.random.randint(0, 2, (3762, 3))
