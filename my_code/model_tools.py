@@ -59,16 +59,15 @@ class AmplitudeNormalize(layers.Layer):
     """
     amplitude constraint
     """
-    def __init__(self, channel=2, units=None, **kwargs):
+    def __init__(self, channel=2, **kwargs):
         super(AmplitudeNormalize, self).__init__(**kwargs)
-        self.units = units
         self.channel = channel
 
     def call(self, inputs):
         return tf.math.l2_normalize(inputs, axis=1)
 
     def get_config(self):
-        return {"units": self.units, "channel": self.channel}
+        return {"channel": self.channel}
 
 
 class PowerNormalize(layers.Layer):
@@ -76,9 +75,8 @@ class PowerNormalize(layers.Layer):
     average power constraint
     TODO debug power constraint
     """
-    def __init__(self, units=None, **kwargs):
+    def __init__(self, **kwargs):
         super(PowerNormalize, self).__init__(**kwargs)
-        self.units = units
 
     def call(self, inputs):
         norm_factor = (1./tf.reduce_mean(tf.reduce_sum(tf.square(inputs), axis=1)))**0.5
@@ -86,7 +84,7 @@ class PowerNormalize(layers.Layer):
         return normalize_power
 
     def get_config(self):
-        return {"units": self.units}
+        return super(PowerNormalize, self).get_config()
 
 
 class MyGaussianNoise(layers.Layer):
@@ -174,21 +172,54 @@ class OFDMDeModulation(layers.Layer):
         return config
 
 
+class PRBatchnorm(layers.Layer):
+    """
+    A Novel PAPR Reduction Scheme for OFDM System based on Deep Learning
+    """
+    def __init__(self, trainable, **kwargs):
+        super(PRBatchnorm, self).__init__(**kwargs)
+        self.trainable = trainable
+
+    def build(self, input_shape):
+        """原文中是两个标量"""
+        self.gama = self.add_weight(
+            shape=(input_shape[1], ),
+            initializer=tf.initializers.constant(1.),
+            trainable=self.trainable,
+            name='gama'
+        )
+        self.beta = self.add_weight(
+            shape=(input_shape[1], ), initializer=tf.initializers.constant(0.001), trainable=self.trainable,
+            name='beta'
+        )
+
+    def call(self, inputs):
+        mean = tf.reduce_mean(inputs, axis=0)  # 每一列的均值
+        sigma = tf.math.reduce_variance(inputs, axis=0) # 每一列的方差
+        return tf.add(tf.multiply(self.gama, tf.subtract(inputs, mean)/tf.sqrt(tf.add(sigma, tf.constant(0.001)))), self.beta)
+        # return tf.add(tf.multiply(self.gama, inputs), self.beta)
+
+    def get_config(self):
+        return super(PRBatchnorm, self).get_config()
+
+
 if __name__ == "__main__":
     mapping_pre = np.random.randn(128, 2)
-    # papr_loss = MappingConstraint()
-    # loss = papr_loss(y_pred=mapping_pre, y_true=mapping_pre)
-    # m = MappingLayer()
-    # out = m(mapping_pre)
-    # signal = np.random.randn(10, 2)
-    # Noise = GaussianNoise(10, ofdm_model=False, num_syms=128)
-    # out2 = Noise(signal)
-    # PN = PowerNormalize()
-    # out3 = PN(np.array([[1.,2.], [3.,4.], [5.,6.]]))
-    # ofdm = OFDMModulation(num_sym=128, num_gard=16, num_fft=64)
-    # ofdm_out = ofdm(mapping_pre)
-    # deofdm = OFDMDeModulation(ofdm_outshape=128//64*80, num_gard=16, num_fft=64)
-    # deofdm_out = deofdm(ofdm_out)
+    prbatchnorm = PRBatchnorm(True)
+    out0 = prbatchnorm(mapping_pre)
+    papr_loss = MappingConstraint()
+    loss = papr_loss(y_pred=mapping_pre, y_true=mapping_pre)
+    m = MappingConstraint()
+    out = m(mapping_pre, mapping_pre)
+    signal = np.random.randn(10, 2)
+    Noise = MyGaussianNoise(10, ofdm_model=False, num_syms=128)
+    out2 = Noise(signal)
+    PN = PowerNormalize()
+    out3 = PN(np.array([[1.,2.], [3.,4.], [5.,6.]]))
+    ofdm = OFDMModulation(num_sym=128, num_gard=16, num_fft=64)
+    ofdm_out = ofdm(mapping_pre)
+    deofdm = OFDMDeModulation(ofdm_outshape=128//64*80, num_gard=16, num_fft=64)
+    deofdm_out = deofdm(ofdm_out)
     papr_constraint = PAPRConstraint(128, 23)
     out4 = papr_constraint(mapping_pre, mapping_pre)
     print("finish!")

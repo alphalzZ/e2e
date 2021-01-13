@@ -71,6 +71,13 @@ def qam_process(m, bits_matrix: np.ndarray):
     return bits_matrix
 
 
+def FindLCM(lcm, x=48, y=256):
+    val = lcm
+    while not (val % x == 0 and val % y == 0):
+        val += 1
+    return val
+
+
 class LDPCEncode:
     def __init__(self, g, m, bit_nums):
         self.__g = g
@@ -87,12 +94,23 @@ class LDPCEncode:
         data = qam_process(self.__m, np.mod(np.matmul(self.bits, self.__g), 2))
         if model_name == 'mlp':
             data = data.reshape(-1, self.__m).astype('float32')
+        if model_name == 'conv1d':
+            data = data.reshape(-1)
+            # padding = np.zeros(OFDMParameters.fft_num.value//16*self.__m -
+            #                          data.shape[0]%(OFDMParameters.fft_num.value//16*self.__m),)
+            # data0 = np.concatenate((data, padding))
+            padding = np.zeros(FindLCM(data.shape[0])-data.shape[0],)  # debug 16*3 和 256的公倍数
+            data = np.concatenate((data, padding))
+            return data.reshape(OFDMParameters.fft_num.value//16, -1, self.__m).astype('float32')  # batch, k, m
         padding = np.zeros((OFDMParameters.fft_num.value - data.shape[0]%OFDMParameters.fft_num.value, self.__m))
         return np.concatenate((data, padding), axis=0)
 
     def decode(self, data, model_name='mlp'):
         if model_name == 'mlp':
             return data.reshape(-1, self.__g.shape[1])
+        if model_name == 'conv1d':
+            pass
+
 
     def __bits_process(self, bits: np.ndarray):
         length = bits.shape[0]
@@ -177,10 +195,12 @@ class OFDMParameters(Enum):
 
 
 if __name__ == "__main__":
-    model_save_path = Model_save_path(r'../my_model/mlp_encoder', r'../my_model/mlp_decoder',
-                                      r'../my_model/mlp_mapper')
-    target_path = '../my_model/'
-    make_dirs(model_save_path, target_path)
-    history = History([1, 2], [2], [3, 4], [4], [5], [6], [7])
-    Saver.save_history("../data/history.json", history)
+    # model_save_path = Model_save_path(r'../my_model/mlp_encoder', r'../my_model/mlp_decoder',
+    #                                   r'../my_model/mlp_mapper')
+    # target_path = '../my_model/'
+    # make_dirs(model_save_path, target_path)
+    # history = History([1, 2], [2], [3, 4], [4], [5], [6], [7])
+    # Saver.save_history("../data/history.json", history)
+    print(FindLCM(11286))
     print("finish")
+
