@@ -178,16 +178,30 @@ class PRBatchnorm(layers.Layer):
         self.trainable = trainable
         self.num_fram = num_fram
 
+    # def build(self, input_shape):
+    #     """原文中是两个标量, 此处是每一个子载波对应一个缩放因子"""
+    #     self.gama = self.add_weight(
+    #         shape=(self.num_fram, 1, 1),
+    #         initializer=tf.initializers.constant(1.),
+    #         trainable=self.trainable,
+    #         name='gama'
+    #     )
+    #     self.beta = self.add_weight(
+    #         shape=(self.num_fram, 1, 1), initializer=tf.initializers.constant(0.001), trainable=self.trainable,
+    #         name='beta'
+    #     )
+
     def build(self, input_shape):
         """原文中是两个标量, 此处是每一个子载波对应一个缩放因子"""
-        self.gama = self.add_weight(
-            shape=(self.num_fram, 1, 1),
-            initializer=tf.initializers.constant(1.),
+        shape = (self.num_fram, 1, 1)
+        self.gama = tf.Variable(
+            initial_value=tf.ones(shape),
             trainable=self.trainable,
             name='gama'
         )
-        self.beta = self.add_weight(
-            shape=(self.num_fram, 1, 1), initializer=tf.initializers.constant(0.001), trainable=self.trainable,
+        self.beta = tf.Variable(
+            initial_value=0.001*tf.ones(shape),
+            trainable=self.trainable,
             name='beta'
         )
 
@@ -204,6 +218,15 @@ class PRBatchnorm(layers.Layer):
         config = super(PRBatchnorm, self).get_config()
         config.update({'trainable': self.trainable, 'num_fram': self.num_fram})
         return config
+
+
+def set_trainable(prbatchnorm, flag):
+    if flag:
+        prbatchnorm.gama.trainable = True
+        prbatchnorm.beta.trainable = True
+    else:
+        prbatchnorm.gama.trainable = False
+        prbatchnorm.beta.trainable = False
 
 
 if __name__ == "__main__":

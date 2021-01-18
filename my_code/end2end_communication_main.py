@@ -142,8 +142,8 @@ def main():
     data_set = Data(qam_padding_bits, qam_padding_bits, qam_padding_bits_val, qam_padding_bits_val)
     num_signals, k = qam_padding_bits.shape[0], int(qam_padding_bits.shape[1] // m)
     input_shape = qam_padding_bits_test.shape if model_name == 'conv1d' else num_signals
-    epochs = 1001
-    continued, ofdm_model, train_union = 0, 1, 0  # ofdm 模式下需要先训练ber，再训练papr（0,1,0）-->（1,1,1）
+    epochs = 501
+    continued, ofdm_model, train_union = 1, 1, 1  # ofdm 模式下需要先训练ber，再训练papr（0,1,0）-->（1,1,1）
     factor_trainable = 0
     constraint, mapping_method = 'pow', 'pow'  # constraint: amp,pow; mapping_method: papr, none, pow
     model_load_path = ofdm_papr_model_save_path
@@ -153,10 +153,11 @@ def main():
         if train_union:  # 如果过度拟合decoder的话整体性能将会下降
             if model_name == 'mlp':  # 冻结decoder
                 for layer in decoder.layers[:2]:
-                    layer.trainable = False
+                    layer.trainable = True
             if model_name == 'conv1d':
                 decoder.conv1d1.trainable = False
                 decoder.conv1d2.trainable = False
+            #  TODO 将gama 和 beta权重固定，单独训练ber
     else:
         M = Models(m=m, constraint=constraint, channels=2)  # constraint:power or amplitude
         encoder, decoder, mapper = M.get_model(model_name=model_name, snr=snr_ebn0, ofdm_model=ofdm_model,

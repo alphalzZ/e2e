@@ -117,6 +117,7 @@ class MLPEncoder(keras.Model):
         self.constraint = constraint
         self.encoder_in = layers.InputLayer(input_shape=(m,))
         self.encoder_layers = [layers.Dense(2 ** i, activation='elu') for i in range(4 if m < 4 else m, 1, -1)]
+        self.batchnorms = [layers.BatchNormalization() for _ in range(4 if m < 4 else m, 1, -1)]
         self.encoder_out = layers.Dense(channels, activation='elu', name='encoder_out')
         if constraint == 'pow':
             self.normalize_layer = PowerNormalize(name='normalize')
@@ -125,8 +126,9 @@ class MLPEncoder(keras.Model):
 
     def call(self, inputs):
         x = self.encoder_in(inputs)
-        for layer in self.encoder_layers:
+        for layer, batchnorm in zip(self.encoder_layers, self.batchnorms):
             x = layer(x)
+            x = batchnorm(x)
         x = self.encoder_out(x)
         if self.constraint is not "none":
             x = self.normalize_layer(x)
@@ -143,12 +145,14 @@ class MLPDecoder(keras.Model):
         super(MLPDecoder, self).__init__()
         self.decoder_in = layers.InputLayer(input_shape=(channels,))
         self.decoder_layers = [layers.Dense(2 ** i, activation='elu') for i in range(2, 4 if m < 4 else m + 1, 1)]
+        self.batchnorms = [layers.BatchNormalization() for _ in range(2, 4 if m < 4 else m + 1, 1)]
         self.decoder_out = layers.Dense(m, activation='sigmoid')
 
     def call(self, inputs):
         x = self.decoder_in(inputs)
-        for layer in self.decoder_layers:
+        for layer, batchnorm in zip(self.decoder_layers, self.batchnorms):
             x = layer(x)
+            x = batchnorm(x)
         return self.decoder_out(x)
 
 
