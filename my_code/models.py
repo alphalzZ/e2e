@@ -122,15 +122,13 @@ class MLPEncoder(keras.Model):
             self.normalize_layer = PowerNormalize(name='normalize')
         elif constraint == 'amp':
             self.normalize_layer = AmplitudeNormalize(name='normalize')
-        self.prnormalize_layer = PRBatchnorm(True, name='prbatchnorma')
 
     def call(self, inputs):
         x = self.encoder_in(inputs)
         for layer in self.encoder_layers:
             x = layer(x)
         x = self.encoder_out(x)
-        x = self.prnormalize_layer(x)
-        if self.constraint is not 'none':
+        if self.constraint is not "none":
             x = self.normalize_layer(x)
         return x
 
@@ -158,6 +156,7 @@ class MLPMapper(keras.Model):
     def __init__(self, m, channels, snr, constraint, ofdm_model, input_syms, ofdm_out_syms):
         super(MLPMapper, self).__init__()
         self.ofdm_model = ofdm_model
+        self.constraint = constraint
         self.encoder = MLPEncoder(m, channels, constraint)
         if ofdm_model:
             self.ofdm_layer = OFDMModulation(input_syms, name='ofdm')
@@ -176,8 +175,7 @@ class MLPMapper(keras.Model):
         return x
 
     def get_config(self):
-        return {'ofdm_model': self.ofdm_model}
-
+        return {'ofdm_model': self.ofdm_model, 'constraint': self.constraint}
 
 
 class Conv1dEncoder(keras.Model):
@@ -268,8 +266,8 @@ class Conv1dAE(keras.Model):
 
 
 def main():
-    train_data = np.random.randint(0, 2, (3328, 3))
-    mlp_mapper = MLPMapper(3, 2, 13, 'pow', 1, 3328, 3328//256*288)
+    train_data = np.random.randint(0, 2, (3840, 3))
+    mlp_mapper = MLPMapper(3, 2, 13, 'pow', 1, 3840, 3840//256*288)
     y = mlp_mapper(train_data)
     print('mlp_mapper_out:{}'.format(y.shape))
     mlp_decoder = MLPDecoder(3, 2)

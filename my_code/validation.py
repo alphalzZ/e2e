@@ -36,9 +36,8 @@ def validation_one():
     qam_padding_bits_test = ldpc_encoder.encode(model_name='mlp')
     num_syms = qam_padding_bits_test.shape[0]#*qam_padding_bits_test.shape[1]
     ofdm_model = 1
-    encoder, decoder, mapper = model_load(ofdm_model_load_path)
+    encoder, decoder, mapper = model_load(ofdm_papr_model_load_path)
     if ofdm_model:
-        ofdm_ifft = OFDMModulation(num_syms, name='ofdm')
         ofdm_fft = OFDMDeModulation(num_syms // OFDMParameters.fft_num.value * OFDMParameters.ofdm_syms.value)
     history = {'snr': [], 'ber': [], 'papr': []}
     for snr in range(0, 25):
@@ -46,9 +45,9 @@ def validation_one():
                                   nbps=m, num_syms=num_syms)
         papr_esitimator = PAPRConstraint(num_syms, snr)
         mapping = encoder(qam_padding_bits_test)
-        papr = papr_esitimator(mapping, mapping).numpy()
         if ofdm_model:
-            mapping = ofdm_ifft(mapping)
+            mapping = mapper.ofdm_layer(mapping)
+        papr = papr_esitimator(mapping, mapping).numpy()
         received = channel(mapping)
         if ofdm_model:
             received = ofdm_fft(received)

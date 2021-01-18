@@ -60,15 +60,15 @@ class Train:
         y_val = tf.cast(y_val, tf.int32)
         for epoch in range(epochs):
             train_loss, train_accuracy, train_papr = self.__train_step(decoder, mapper, x_train, y_train)
-            encoder = mapper.encoder
-            mapping = encoder(x_val)
+            mapping = mapper.encoder(x_val)
+            papr_input = mapper.ofdm_layer(mapping)
             val_pre = decoder(mapper(x_val))
             #  val metrics
             val_loss = self.binary_cross_entropy_metrics(y_val, val_pre).numpy()
             val_accuracy = self.binary_accuracy_metrics(y_val, val_pre).numpy()
             val_papr = -1.
             if self.ofdm_model:
-                val_papr = self.papr_loss(mapping, mapping).numpy()
+                val_papr = self.papr_loss(papr_input, papr_input).numpy()
             history.epoch.append(epoch)
             history.loss.append(float(train_loss))
             history.val_loss.append(float(val_loss))
@@ -87,17 +87,16 @@ class Train:
     def __train_step(self, decoder, mapper, x_train, y_train):
         with tf.GradientTape() as tape1:
             prediction = decoder(mapper(x_train))
-            encoder = mapper.encoder
-            mapping = encoder(x_train)  # TODO 是否反向传播到了
+            mapping = mapper.encoder(x_train)  # TODO papr_loss中的prbatchnorm和mapper中的prbatchnorm参数不一致
+            ofdm_signal = mapper.ofdm_layer(mapping)
             binary_loss = self.prime_loss(y_train, prediction)
             mapping_loss = self.mapping_loss(mapping, mapping)
             current_loss = 1 / (2 * self.regularization_factor[0] ** 2) * binary_loss + \
                            1 / (2 * self.regularization_factor[1] ** 2) * mapping_loss + \
                            tf.math.log(reduce(lambda x, y: x * y ** 2, self.regularization_factor[:-1]))
-            train_papr = -1.
+            papr_loss = self.papr_loss(ofdm_signal, ofdm_signal)  #
+            train_papr = papr_loss.numpy()
             if self.ofdm_model and self.train_union:  # ofdm训练ber
-                papr_loss = self.papr_loss(mapping, mapping)
-                train_papr = papr_loss.numpy()
                 current_loss = current_loss + 1 / (2 * self.regularization_factor[-1] ** 2) * papr_loss + \
                     tf.math.log(self.regularization_factor[-1]**2)
             train_loss = self.binary_cross_entropy_metrics(y_train, prediction).numpy()
@@ -143,11 +142,11 @@ def main():
     data_set = Data(qam_padding_bits, qam_padding_bits, qam_padding_bits_val, qam_padding_bits_val)
     num_signals, k = qam_padding_bits.shape[0], int(qam_padding_bits.shape[1] // m)
     input_shape = qam_padding_bits_test.shape if model_name == 'conv1d' else num_signals
-    epochs = 501
-    continued, ofdm_model, train_union = 1, 1, 1  # ofdm 模式下需要先训练ber，再训练papr（0,1,0）-->（1,1,1）
+    epochs = 1001
+    continued, ofdm_model, train_union = 0, 1, 0  # ofdm 模式下需要先训练ber，再训练papr（0,1,0）-->（1,1,1）
     factor_trainable = 0
-    constraint, mapping_method = 'amp', 'pow'  # constraint: amp,pow; mapping_method: papr, none, pow
-    model_load_path = ofdm_model_save_path
+    constraint, mapping_method = 'pow', 'pow'  # constraint: amp,pow; mapping_method: papr, none, pow
+    model_load_path = ofdm_papr_model_save_path
     model_save_path = ofdm_papr_model_save_path
     if continued:
         encoder, decoder, mapper = model_load(model_path=model_load_path)
@@ -158,7 +157,6 @@ def main():
             if model_name == 'conv1d':
                 decoder.conv1d1.trainable = False
                 decoder.conv1d2.trainable = False
-            mapper.encoder.normalize_layer.trainable = True
     else:
         M = Models(m=m, constraint=constraint, channels=2)  # constraint:power or amplitude
         encoder, decoder, mapper = M.get_model(model_name=model_name, snr=snr_ebn0, ofdm_model=ofdm_model,
@@ -176,8 +174,9 @@ def main():
 
 
 if __name__ == "__main__":
+
     # TODO：
     #  1.优化papr
     #  2.papr的自适应MTL表达式
-    with tf.device('/CPU:0'):
+    with tf.device('/GPU:0'):
         main()

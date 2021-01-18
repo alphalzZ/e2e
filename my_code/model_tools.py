@@ -39,20 +39,20 @@ class PAPRConstraint(losses.Loss):
         super().__init__(name=name)
         self.num_fram = num_syms // num_fft
         self.num_ofdm_length = num_fft + num_guard
-        self.__ofdm_layer = OFDMModulation(num_syms)
         self.__noise_layer = MyGaussianNoise(snr, ofdm_model=1, num_syms=num_syms)
 
     def call(self, y_true, y_pred):
         ofdm_shape = (self.num_fram, self.num_ofdm_length)  # （子载波数量，ofdm符号个数）
-        ofdm_signal_iq = self.__noise_layer(self.__ofdm_layer(y_pred))
+        ofdm_signal_iq = self.__noise_layer(y_pred)
         ofdm_signal_complex = tf.complex(ofdm_signal_iq[:, 0], ofdm_signal_iq[:, 1])
         ofdm_signal = tf.reshape(ofdm_signal_complex, ofdm_shape)
         signal_power = tf.square(tf.math.real(tf.multiply(ofdm_signal, tf.math.conj(ofdm_signal))))
         mean_pow = tf.reduce_mean(signal_power, axis=1)
         max_pow = tf.reduce_max(signal_power, axis=1)
-        papr_vector = 10 * tf.math.log(max_pow / mean_pow)
-        papr = tf.reduce_mean(papr_vector)  # reduce_sum or reduce_mean ?
-        return papr
+        papr_vector = max_pow / mean_pow
+        papr = tf.reduce_mean(papr_vector)
+        papr_log = 10*tf.math.log(papr)
+        return papr_log
 
 
 class AmplitudeNormalize(layers.Layer):
@@ -125,18 +125,18 @@ class OFDMModulation(layers.Layer):
         super(OFDMModulation, self).__init__(**kwargs)
         self.num_gard, self.num_fft = num_gard, num_fft
         self.num_sym = num_sym
+        self.prbatchnorm = PRBatchnorm(True, num_sym//num_fft)
 
     def call(self, inputs):  # (num_symbols, 2)
-        x_GI = []
         num_fram = self.num_sym//self.num_fft
-        for i in range(num_fram):
-            X = tf.complex(inputs[i*self.num_fft: (i+1)*self.num_fft, 0],
-                           inputs[i*self.num_fft:(i+1)*self.num_fft, 1])
-            x = tf.signal.ifft(X)
-            x_GI.append(tf.concat((x[self.num_fft - self.num_gard:self.num_fft], x), axis=0))
-        ifft_signal = tf.concat(x_GI, axis=0)
-        outputs = tf.concat((tf.math.real(ifft_signal)[:, None], tf.math.imag(ifft_signal)[:, None]), axis=1)
-        return outputs
+        X = tf.complex(inputs[:, 0], inputs[:, 1])
+        X = tf.reshape(X[:, None], [num_fram, -1])
+        x = tf.signal.ifft(X)
+        x = tf.concat((x[:, self.num_fft - self.num_gard:self.num_fft], x), axis=1)
+        x = self.prbatchnorm(x)  # (frams,syms)
+        x = tf.reshape(x, [-1, 1])
+        x = tf.concat((tf.math.real(x), tf.math.imag(x)), axis=1)
+        return x
 
     def get_config(self):
         config = super(OFDMModulation, self).get_config()
@@ -154,15 +154,12 @@ class OFDMDeModulation(layers.Layer):
         self.ofdm_outshape = ofdm_outshape
 
     def call(self, inputs):
-        Y = []
         num_fram = self.ofdm_outshape // self.num_sym
-        for i in range(num_fram):
-            YGI = tf.complex(inputs[i*self.num_sym: (i+1)*self.num_sym, 0],
-                           inputs[i*self.num_sym:(i+1)*self.num_sym, 1])
-            y = tf.signal.fft(YGI[self.num_gard:self.num_sym])
-            Y.append(y)
-        fft_signal = tf.concat(Y, axis=0)
-        outputs = tf.concat((tf.math.real(fft_signal)[:, None], tf.math.imag(fft_signal)[:, None]), axis=1)
+        Y = tf.complex(inputs[:, 0], inputs[:, 1])
+        Y = tf.reshape(Y, (num_fram, -1))
+        y = tf.signal.fft(Y[:, self.num_gard:self.num_sym])
+        y = tf.reshape(y, (-1, 1))
+        outputs = tf.concat((tf.math.real(y), tf.math.imag(y)), axis=1)
         return outputs
 
     def get_config(self):
@@ -176,49 +173,56 @@ class PRBatchnorm(layers.Layer):
     """
     A Novel PAPR Reduction Scheme for OFDM System based on Deep Learning
     """
-    def __init__(self, trainable, **kwargs):
+    def __init__(self, trainable, num_fram, **kwargs):
         super(PRBatchnorm, self).__init__(**kwargs)
         self.trainable = trainable
+        self.num_fram = num_fram
 
     def build(self, input_shape):
-        """原文中是两个标量"""
+        """原文中是两个标量, 此处是每一个子载波对应一个缩放因子"""
         self.gama = self.add_weight(
-            shape=(input_shape[1], ),
+            shape=(self.num_fram, 1, 1),
             initializer=tf.initializers.constant(1.),
             trainable=self.trainable,
             name='gama'
         )
         self.beta = self.add_weight(
-            shape=(input_shape[1], ), initializer=tf.initializers.constant(0.001), trainable=self.trainable,
+            shape=(self.num_fram, 1, 1), initializer=tf.initializers.constant(0.001), trainable=self.trainable,
             name='beta'
         )
 
     def call(self, inputs):
-        mean = tf.reduce_mean(inputs, axis=0)  # 每一列的均值
-        sigma = tf.math.reduce_variance(inputs, axis=0) # 每一列的方差
-        return tf.add(tf.multiply(self.gama, tf.subtract(inputs, mean)/tf.sqrt(tf.add(sigma, tf.constant(0.001)))), self.beta)
-        # return tf.add(tf.multiply(self.gama, inputs), self.beta)
+        """inputs:复信号，（num_fram, num_syms）"""
+        inputs = tf.concat((tf.math.real(inputs)[:, :, None], tf.math.imag(inputs)[:, :, None]), axis=2)
+        mean = tf.reduce_mean(inputs, axis=1)  # 每一个子载波的均值
+        inputs = tf.subtract(inputs, mean[:, None, :])
+        sigma = tf.math.reduce_variance(inputs, axis=1) # 每一个子载波的方差
+        x = tf.add(tf.multiply(self.gama, inputs)/tf.sqrt(tf.add(sigma[:, None, :], tf.constant(0.001))), self.beta)
+        return tf.complex(x[:, :, 0], x[:, :, 1])
 
     def get_config(self):
-        return super(PRBatchnorm, self).get_config()
+        config = super(PRBatchnorm, self).get_config()
+        config.update({'trainable': self.trainable, 'num_fram': self.num_fram})
+        return config
 
 
 if __name__ == "__main__":
-    mapping_pre = np.random.randn(128, 2)
-    prbatchnorm = PRBatchnorm(True)
-    out0 = prbatchnorm(mapping_pre)
-    papr_loss = MappingConstraint()
-    loss = papr_loss(y_pred=mapping_pre, y_true=mapping_pre)
-    m = MappingConstraint()
-    out = m(mapping_pre, mapping_pre)
-    signal = np.random.randn(10, 2)
-    Noise = MyGaussianNoise(10, ofdm_model=False, num_syms=128)
-    out2 = Noise(signal)
-    PN = PowerNormalize()
-    out3 = PN(np.array([[1.,2.], [3.,4.], [5.,6.]]))
-    ofdm = OFDMModulation(num_sym=128, num_gard=16, num_fft=64)
+    mapping_pre = np.random.randn(512, 2)
+    # complex_signal = tf.complex(tf.random.uniform((2, 32)), tf.random.uniform((2, 32)))
+    # prbatchnorm = PRBatchnorm(True, 2)
+    # out0 = prbatchnorm(complex_signal)
+    # papr_loss = MappingConstraint()
+    # loss = papr_loss(y_pred=mapping_pre, y_true=mapping_pre)
+    # m = MappingConstraint()
+    # out = m(mapping_pre, mapping_pre)
+    # signal = np.random.randn(10, 2)
+    # Noise = MyGaussianNoise(10, ofdm_model=False, num_syms=128)
+    # out2 = Noise(signal)
+    # PN = PowerNormalize()
+    # out3 = PN(np.array([[1.,2.], [3.,4.], [5.,6.]]))
+    ofdm = OFDMModulation(num_sym=512)
     ofdm_out = ofdm(mapping_pre)
-    deofdm = OFDMDeModulation(ofdm_outshape=128//64*80, num_gard=16, num_fft=64)
+    deofdm = OFDMDeModulation(ofdm_outshape=512//256*288)
     deofdm_out = deofdm(ofdm_out)
     papr_constraint = PAPRConstraint(128, 23)
     out4 = papr_constraint(mapping_pre, mapping_pre)
