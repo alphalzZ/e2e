@@ -92,7 +92,7 @@ class LDPCEncode:
         if bits is not None:
             self.bits = self.__bits_process(bits)
         data = qam_process(self.__m, np.mod(np.matmul(self.bits, self.__g), 2))
-        if model_name == 'mlp':
+        if model_name == 'mlp' or 'attention':
             data = data.reshape(-1, self.__m).astype('float32')
         if model_name == 'conv1d':
             data = data.reshape(-1)
