@@ -92,7 +92,7 @@ class LDPCEncode:
         if bits is not None:
             self.bits = self.__bits_process(bits)
         data = qam_process(self.__m, np.mod(np.matmul(self.bits, self.__g), 2))
-        if model_name == 'mlp':
+        if model_name == 'mlp' or model_name == 'attention':
             data = data.reshape(-1, self.__m).astype('float32')
         if model_name == 'conv1d':
             data = data.reshape(-1)
@@ -147,7 +147,7 @@ class Saver:
         sio.savemat(result_save_path.mapper_test_pre, {'mapper_test_result': mapper_test_pre.numpy()})
         sio.savemat(result_save_path.decoder_train_pre, {'decoder_train_result': decoder_train_pre.numpy()})
         sio.savemat(result_save_path.decoder_test_pre, {'decoder_test_result': decoder_test_pre.numpy()})
-        make_dirs(model_save_path, "../my_model8/")
+        make_dirs(model_save_path, "../my_model_atten/")
         keras.models.save_model(encoder, model_save_path.encoder_save_path)
         keras.models.save_model(decoder, model_save_path.decoder_save_path)
         keras.models.save_model(mapper, model_save_path.mapper_save_path)

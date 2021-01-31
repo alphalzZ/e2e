@@ -48,7 +48,7 @@ class Train:
                                           tf.Variable(1., trainable=factor_trainable),
                                           tf.Variable(0.001, trainable=factor_trainable)]
         if ofdm_model:
-            if model_name == 'mlp':
+            if model_name == 'mlp' or model_name == 'attention':
                 self.papr_loss = PAPRConstraint(num_syms=data[0].shape[0], snr=snr)
             if model_name == 'conv1d':
                 self.papr_loss = PAPRConstraint(num_syms=data[0].shape[0]*data[0].shape[1], snr=snr)
@@ -132,7 +132,9 @@ def main():
                                            r'../my_model8/mlp_ofdm_papr_mapper')
     ofdm_conv_model_save_path = Model_save_path(r'../my_model_conv/ofdm_encoder', r'../my_model_conv/ofdm_decoder',
                                            r'../my_model_conv/ofdm_mapper')
-    model_name = 'mlp'  # conv1d or mlp
+    ofdm_atten_model_save_path = Model_save_path(r'../my_model_atten/ofdm_encoder', r'../my_model_atten/ofdm_decoder',
+                                                r'../my_model_atten/ofdm_mapper')
+    model_name = 'attention'  # conv1d or mlp or attention
     ldpc_encoder = LDPCEncode(g, m, bit_nums)
     qam_padding_bits = ldpc_encoder.encode(model_name=model_name)  # 随机比特流数据作为训练数据
     qam_padding_bits_val = ldpc_encoder.encode(model_name=model_name)  # 生成验证数据
@@ -142,12 +144,12 @@ def main():
     data_set = Data(qam_padding_bits, qam_padding_bits, qam_padding_bits_val, qam_padding_bits_val)
     num_signals, k = qam_padding_bits.shape[0], int(qam_padding_bits.shape[1] // m)
     input_shape = qam_padding_bits_test.shape if model_name == 'conv1d' else num_signals
-    epochs = 501
+    epochs = 1001
     continued, ofdm_model, train_union = 1, 1, 1  # ofdm 模式下需要先训练ber，再训练papr（0,1,0）-->（1,1,1）
     factor_trainable = 0
     constraint, mapping_method = 'pow', 'pow'  # constraint: amp,pow; mapping_method: papr, none, pow
-    model_load_path = ofdm_papr_model_save_path
-    model_save_path = ofdm_papr_model_save_path
+    model_load_path = ofdm_atten_model_save_path
+    model_save_path = ofdm_atten_model_save_path
     if continued:
         encoder, decoder, mapper = model_load(model_path=model_load_path)
         if train_union:  # 如果过度拟合decoder的话整体性能将会下降

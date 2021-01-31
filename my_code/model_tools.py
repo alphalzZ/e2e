@@ -70,6 +70,40 @@ class AmplitudeNormalize(layers.Layer):
         return {"channel": self.channel}
 
 
+class SelfAttention(layers.Layer):
+    """
+    reference: Attention is all you need
+    """
+    def __init__(self, **kwargs):
+        super(SelfAttention, self).__init__(**kwargs)
+        self.softmax = layers.Softmax(axis=1)
+
+    def build(self, input_shape):
+        #  input_shape:(batch_size, m)
+        self.w = self.add_weight(shape=(input_shape[-1], input_shape[-1]), initializer='random_normal',
+                                 trainable=True, name='w')
+        self.w_q = self.add_weight(shape=(input_shape[-1], input_shape[-1]), initializer='random_normal',
+                                   trainable=True, name='w_q')
+        self.w_k = self.add_weight(shape=(input_shape[-1], input_shape[-1]), initializer='random_normal',
+                                   trainable=True, name='w_k')
+        self.w_v = self.add_weight(shape=(input_shape[-1], input_shape[-1]), initializer='random_normal',
+                                   trainable=True, name='w_v')
+
+    def call(self, inputs):
+        a = tf.matmul(inputs, self.w)  # (batch.m)
+        q = tf.matmul(a, self.w_q)
+        k = tf.matmul(a, self.w_k)
+        v = tf.matmul(a, self.w_v)
+        k_q = tf.matmul(tf.transpose(k), q)
+        k_q_hat = self.softmax(k_q)
+        out = tf.matmul(v, k_q_hat)
+        return out
+
+    def get_config(self):
+        config = super(SelfAttention, self).get_config()
+        return config
+
+
 class PowerNormalize(layers.Layer):
     """
     average power constraint
@@ -220,16 +254,10 @@ class PRBatchnorm(layers.Layer):
         return config
 
 
-def set_trainable(prbatchnorm, flag):
-    if flag:
-        prbatchnorm.gama.trainable = True
-        prbatchnorm.beta.trainable = True
-    else:
-        prbatchnorm.gama.trainable = False
-        prbatchnorm.beta.trainable = False
-
-
 if __name__ == "__main__":
+    Input = np.random.randn(32, 3)
+    atten = SelfAttention()
+    out = atten(Input)
     mapping_pre = np.random.randn(512, 2)
     # complex_signal = tf.complex(tf.random.uniform((2, 32)), tf.random.uniform((2, 32)))
     # prbatchnorm = PRBatchnorm(True, 2)
