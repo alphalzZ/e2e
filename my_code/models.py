@@ -26,7 +26,9 @@ class Models:
             self.decoder = MLPDecoder(self.m, self.channels)
             self.mapper = MLPMapper(self.m, self.channels, snr, self.constraint, ofdm_model, input_shape, ofdm_outshape)
         elif model_name == 'attention':
-            pass
+            self.encoder = AttentionEncoder(self.m, self.channels, self.constraint)
+            self.decoder = AttentionDecoder(self.m, self.channels)
+            self.mapper = AttentionMapper(self.m, self.channels, snr, self.constraint, ofdm_model, input_shape, ofdm_outshape)
         elif model_name == 'conv1d':
             #  input_shape: (batch_size, num_symbols, m)
             self.encoder = Conv1dEncoder(input_shape, self.channels)
@@ -123,8 +125,6 @@ class MLPEncoder(keras.Model):
             self.normalize_layer = PowerNormalize(name='normalize')
         elif constraint == 'amp':
             self.normalize_layer = AmplitudeNormalize(name='normalize')
-        else:
-            self.normalize_layer = layers.BatchNormalization()
 
     def call(self, inputs):
         x = self.encoder_in(inputs)
@@ -165,7 +165,7 @@ class MLPMapper(keras.Model):
         self.constraint = constraint
         self.encoder = MLPEncoder(m, channels, constraint)
         if ofdm_model:
-            self.ofdm_layer = OFDMModulation(input_syms,name='ofdm')
+            self.ofdm_layer = OFDMModulation(input_syms, name='ofdm')
             self.de_ofdm_layer = OFDMDeModulation(ofdm_out_syms, name='deofdm')
         self.noise_layer = MyGaussianNoise(snr=snr, nbps=m, num_syms=input_syms, ofdm_model=ofdm_model,
                                       name='noise_layer')
@@ -231,9 +231,9 @@ class ConvMapper(keras.Model):
         self.constraint = constraint
         ofdm_outshape = num_syms // OFDMParameters.fft_num.value * OFDMParameters.ofdm_syms.value
         self.encoder = Conv1dEncoder(input_dim=input_shape, channels=2)
-        self.ofdm_layer = OFDMModulation(num_syms)
+        self.ofdm_ifft = OFDMModulation(num_syms)
         self.noise_layer = MyGaussianNoise(snr=snr, ofdm_model=ofdm_model, num_syms=num_syms, nbps=m)
-        self.de_ofdm_layer = OFDMDeModulation(ofdm_outshape)
+        self.ofdm_fft = OFDMDeModulation(ofdm_outshape)
         if constraint == 'pow':
             self.__normalize_layer = PowerNormalize(name='normalize')
         elif constraint == 'amp':
@@ -244,10 +244,10 @@ class ConvMapper(keras.Model):
         if self.constraint is not 'none':
             encoded = self.__normalize_layer(encoded)
         if self.ofdm_model:
-            encoded = self.ofdm_layer(encoded)
+            encoded = self.ofdm_ifft(encoded)
         out = self.noise_layer(encoded)
         if self.ofdm_model:
-            out = self.de_ofdm_layer(out)
+            out = self.ofdm_fft(out)
         return out
 
     def get_config(self):
@@ -271,10 +271,95 @@ class Conv1dAE(keras.Model):
         return self.decoder(self.mapper(inputs))
 
 
+class AttentionEncoder(keras.Model):
+    def __init__(self, m, channel, constraint):
+        super(AttentionEncoder, self).__init__()
+        self.constraint = constraint
+        self.Input = layers.InputLayer(input_shape=(m,))
+        self.up_sample = layers.Dense(6, activation='elu', input_shape=())
+        self.up_attention = SelfAttention()
+        self.down_sample = layers.Dense(4, activation='elu')
+        self.down_attention = SelfAttention()
+        self.out = layers.Dense(channel, activation='sigmoid')
+        if constraint == 'pow':
+            self.normalize_layer = PowerNormalize(name='normalize')
+        elif constraint == 'amp':
+            self.normalize_layer = AmplitudeNormalize(name='normalize')
 
+    def call(self, inputs):
+        x = self.Input(inputs)
+        x = self.up_sample(x)
+        x = self.up_attention(x)
+        x = self.down_sample(x)
+        x = self.down_attention(x)
+        x = self.out(x)
+        if self.constraint is not "none":
+            x = self.normalize_layer(x)
+        return x
+
+    def get_config(self):
+        config = super(AttentionEncoder, self).get_config()
+        config.update({'constraint': self.constraint})
+        return config
+
+
+class AttentionDecoder(keras.Model):
+    def __init__(self, m, channels):
+        super(AttentionDecoder, self).__init__()
+        self.Input = keras.layers.InputLayer(input_shape=(channels,))
+        self.down_attention = SelfAttention()
+        self.up_sample = layers.Dense(4, activation='elu')
+        self.up_attention = SelfAttention()
+        self.down_sample = layers.Dense(6, activation='elu')
+        self.out = layers.Dense(m, activation='sigmoid')
+
+    def call(self, inputs):
+        x = self.Input(inputs)
+        x = self.down_attention(x)
+        x = self.up_sample(x)
+        x = self.up_attention(x)
+        x = self.down_sample(x)
+        x = self.out(x)
+        return x
+
+
+class AttentionMapper(keras.Model):
+    def __init__(self, m, channels, snr, constraint, ofdm_model, input_syms, ofdm_out_syms):
+        super(AttentionMapper, self).__init__()
+        self.ofdm_model = ofdm_model
+        self.constraint = constraint
+        self.encoder = AttentionEncoder(m, channels, constraint)
+        if ofdm_model:
+            self.ofdm_layer = OFDMModulation(input_syms, name='ofdm')
+            self.de_ofdm_layer = OFDMDeModulation(ofdm_out_syms, name='deofdm')
+        self.noise_layer = MyGaussianNoise(snr=snr, nbps=m, num_syms=input_syms, ofdm_model=ofdm_model,
+                                           name='noise_layer')
+
+    def call(self, inputs):
+        x = self.encoder(inputs)
+        if self.ofdm_model:
+            x = self.ofdm_layer(x)
+            x = self.noise_layer(x)
+            x = self.de_ofdm_layer(x)
+        else:
+            x = self.noise_layer(x)
+        return x
+
+    def get_config(self):
+        return {'ofdm_model': self.ofdm_model, 'constraint': self.constraint}
 
 
 def main():
+    in_signal = np.random.randint(0, 2, (3840, 3))
+    atten_mapper = AttentionMapper(3, 2, 13, 'pow', 1, 3840, 3840//256*288)
+    out0 = atten_mapper(in_signal)
+    print(out0.shape)
+    atten_encoder = AttentionEncoder(3, 2, 'pow')
+    atten_decoder = AttentionDecoder(3, 2)
+    out = atten_encoder(in_signal)
+    print(out.shape)  # (10000,2)
+    out2 = atten_decoder(out)
+    print(out2.shape)  # （1000,3）
     train_data = np.random.randint(0, 2, (3840, 3))
     mlp_mapper = MLPMapper(3, 2, 13, 'pow', 1, 3840, 3840//256*288)
     y = mlp_mapper(train_data)

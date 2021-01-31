@@ -18,7 +18,6 @@ class Train:
         self.data = data
         self.factor_trainable = factor_trainable
         self.train_union = train_union
-        self.continued = continued
         self.__m = m
         self.ofdm_model = ofdm_model
         self.model_name = model_name
@@ -27,7 +26,7 @@ class Train:
         elif opt == "sgd":
             self.optimizer = keras.optimizers.SGD(lr=lr)
         else:
-            self.optimizer = keras.optimizers.Adamax(lr=lr)
+            self.optimizer = keras.optimizers.Ftrl(lr=lr)
         self.prime_loss = keras.losses.BinaryCrossentropy()
         self.mapping_loss = MappingConstraint(mapping_method)
         self.binary_cross_entropy_metrics = keras.metrics.BinaryCrossentropy()
@@ -47,9 +46,9 @@ class Train:
         if reset_regular_factor:
             self.regularization_factor = [tf.Variable(1., trainable=factor_trainable),
                                           tf.Variable(1., trainable=factor_trainable),
-                                          tf.Variable(0.0001, trainable=factor_trainable)]
+                                          tf.Variable(0.001, trainable=factor_trainable)]
         if ofdm_model:
-            if model_name == 'mlp':
+            if model_name == 'mlp' or model_name == 'attention':
                 self.papr_loss = PAPRConstraint(num_syms=data[0].shape[0], snr=snr)
             if model_name == 'conv1d':
                 self.papr_loss = PAPRConstraint(num_syms=data[0].shape[0]*data[0].shape[1], snr=snr)
@@ -86,18 +85,16 @@ class Train:
         return history
 
     def __train_step(self, decoder, mapper, x_train, y_train):
-        if self.continued and not self.train_union:
-            mapper.trainable = False
         with tf.GradientTape() as tape1:
             prediction = decoder(mapper(x_train))
-            mapping = mapper.encoder(x_train)
+            mapping = mapper.encoder(x_train)  # TODO papr_loss中的prbatchnorm和mapper中的prbatchnorm参数不一致
             ofdm_signal = mapper.ofdm_layer(mapping)
-            binary_loss = self.prime_loss(y_train, prediction)  # 设计更合适的损失函数
-            mapping_loss = self.mapping_loss(mapping, mapping)  # TODO 设计合适的映射约束
+            binary_loss = self.prime_loss(y_train, prediction)
+            mapping_loss = self.mapping_loss(mapping, mapping)
             current_loss = 1 / (2 * self.regularization_factor[0] ** 2) * binary_loss + \
                            1 / (2 * self.regularization_factor[1] ** 2) * mapping_loss + \
                            tf.math.log(reduce(lambda x, y: x * y ** 2, self.regularization_factor[:-1]))
-            papr_loss = self.papr_loss(ofdm_signal, ofdm_signal)  # 设计papr_loss
+            papr_loss = self.papr_loss(ofdm_signal, ofdm_signal)  #
             train_papr = papr_loss.numpy()
             if self.ofdm_model and self.train_union:  # ofdm训练ber
                 current_loss = current_loss + 1 / (2 * self.regularization_factor[-1] ** 2) * papr_loss + \
@@ -115,33 +112,29 @@ class Train:
         return train_loss, train_accuracy, train_papr
 
 
-result_save_path = Result_save_path(r'../result_data/%dsnr_encoder_train_mapping.mat' % 23,
-                                    r'../result_data/%dsnr_encoder_test_mapping.mat' % 23,
-                                    r'../result_data/%dsnr_decoder_train_recover.mat' % 23,
-                                    r'../result_data/%dsnr_decoder_test_recover.mat' % 23,
-                                    r'../result_data/train_bits.mat',
-                                    r'../result_data/test_bits.mat')
-norm_model_save_path = Model_save_path(r'../my_model8/mlp_encoder', r'../my_model8/mlp_decoder',
-                                       r'../my_model8/mlp_mapper')
-ofdm_model_save_path = Model_save_path(r'../my_model8/mlp_ofdm_encoder', r'../my_model8/mlp_ofdm_decoder',
-                                       r'../my_model8/mlp_ofdm_mapper')
-ofdm_papr_model_save_path = Model_save_path(r'../my_model8/mlp_ofdm_papr_encoder',
-                                            r'../my_model8/mlp_ofdm_papr_decoder',
-                                            r'../my_model8/mlp_ofdm_papr_mapper')
-ofdm_papr_model_save_path_r = Model_save_path(r'../my_model8/mlp_ofdm_papr_encoder_r',
-                                              r'../my_model8/mlp_ofdm_papr_decoder_r',
-                                              r'../my_model8/mlp_ofdm_papr_mapper_r')
-ofdm_conv_model_save_path = Model_save_path(r'../my_model_conv/ofdm_encoder', r'../my_model_conv/ofdm_decoder',
-                                            r'../my_model_conv/ofdm_mapper')
-gh_path = GH_PATH(r'D:\LYJ\AutoEncoder-Based-Communication-System-master\matlab_code\genarateH G\G.mat',
-                  r'D:\LYJ\AutoEncoder-Based-Communication-System-master\matlab_code\genarateH G\H.mat')
-
-
 def main():
+    gh_path = GH_PATH(r'D:\LYJ\AutoEncoder-Based-Communication-System-master\matlab_code\genarateH G\G.mat',
+                      r'D:\LYJ\AutoEncoder-Based-Communication-System-master\matlab_code\genarateH G\H.mat')
     g = load_mat(gh_path.g_path)['outputG']
     h = load_mat(gh_path.h_path)['outputH']
     m, bit_nums, snr_ebn0, channels = 3, 10000, 10, 2
-    model_name = 'conv1d'  # conv1d or mlp
+    result_save_path = Result_save_path(r'../result_data/%dsnr_encoder_train_mapping.mat' % 23,
+                                        r'../result_data/%dsnr_encoder_test_mapping.mat' % 23,
+                                        r'../result_data/%dsnr_decoder_train_recover.mat' % 23,
+                                        r'../result_data/%dsnr_decoder_test_recover.mat' % 23,
+                                        r'../result_data/train_bits.mat',
+                                        r'../result_data/test_bits.mat')
+    norm_model_save_path = Model_save_path(r'../my_model8/mlp_encoder', r'../my_model8/mlp_decoder',
+                                      r'../my_model8/mlp_mapper')
+    ofdm_model_save_path = Model_save_path(r'../my_model8/mlp_ofdm_encoder', r'../my_model8/mlp_ofdm_decoder',
+                                           r'../my_model8/mlp_ofdm_mapper')
+    ofdm_papr_model_save_path = Model_save_path(r'../my_model8/mlp_ofdm_papr_encoder', r'../my_model8/mlp_ofdm_papr_decoder',
+                                           r'../my_model8/mlp_ofdm_papr_mapper')
+    ofdm_conv_model_save_path = Model_save_path(r'../my_model_conv/ofdm_encoder', r'../my_model_conv/ofdm_decoder',
+                                           r'../my_model_conv/ofdm_mapper')
+    ofdm_atten_model_save_path = Model_save_path(r'../my_model_atten/ofdm_encoder', r'../my_model_atten/ofdm_decoder',
+                                                r'../my_model_atten/ofdm_mapper')
+    model_name = 'attention'  # conv1d or mlp or attention
     ldpc_encoder = LDPCEncode(g, m, bit_nums)
     qam_padding_bits = ldpc_encoder.encode(model_name=model_name)  # 随机比特流数据作为训练数据
     qam_padding_bits_val = ldpc_encoder.encode(model_name=model_name)  # 生成验证数据
@@ -151,15 +144,22 @@ def main():
     data_set = Data(qam_padding_bits, qam_padding_bits, qam_padding_bits_val, qam_padding_bits_val)
     num_signals, k = qam_padding_bits.shape[0], int(qam_padding_bits.shape[1] // m)
     input_shape = qam_padding_bits_test.shape if model_name == 'conv1d' else num_signals
-    epochs = 100
-    1
-    continued, ofdm_model, train_union = 0, 1, 0  # ofdm 模式下需要先训练ber，再训练papr（0,1,0）-->（1,1,1）
+    epochs = 1001
+    continued, ofdm_model, train_union = 1, 1, 1  # ofdm 模式下需要先训练ber，再训练papr（0,1,0）-->（1,1,1）
     factor_trainable = 0
-    constraint, mapping_method = 'pow', 'none'  # constraint: amp,pow,none; mapping_method: none, pow
-    model_load_path = ofdm_conv_model_save_path
-    model_save_path = ofdm_conv_model_save_path
+    constraint, mapping_method = 'pow', 'pow'  # constraint: amp,pow; mapping_method: papr, none, pow
+    model_load_path = ofdm_atten_model_save_path
+    model_save_path = ofdm_atten_model_save_path
     if continued:
         encoder, decoder, mapper = model_load(model_path=model_load_path)
+        if train_union:  # 如果过度拟合decoder的话整体性能将会下降
+            if model_name == 'mlp':  # 冻结decoder
+                for layer in decoder.layers[:2]:
+                    layer.trainable = True
+            if model_name == 'conv1d':
+                decoder.conv1d1.trainable = False
+                decoder.conv1d2.trainable = False
+            #  TODO 将gama 和 beta权重固定，单独训练ber
     else:
         M = Models(m=m, constraint=constraint, channels=2)  # constraint:power or amplitude
         encoder, decoder, mapper = M.get_model(model_name=model_name, snr=snr_ebn0, ofdm_model=ofdm_model,
