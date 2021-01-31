@@ -193,19 +193,19 @@ class PRBatchnorm(layers.Layer):
 
     def build(self, input_shape):
         """原文中是两个标量, 此处是每一个子载波对应一个缩放因子"""
-        shape = (self.num_fram, 1, 1)
+        shape = (self.num_fram, 1, 2)
         self.gama = tf.Variable(
-            initial_value=tf.ones(shape),
+            initial_value=tf.random.normal(shape, mean=0.1, stddev=0.001),
             trainable=self.trainable,
             name='gama'
         )
         self.beta = tf.Variable(
-            initial_value=0.001*tf.ones(shape),
+            initial_value=0.001*tf.random.normal(shape, stddev=0.01),
             trainable=self.trainable,
             name='beta'
         )
 
-    def call(self, inputs):
+    def call(self, inputs, training=None):
         """inputs:复信号，（num_fram, num_syms）"""
         inputs = tf.concat((tf.math.real(inputs)[:, :, None], tf.math.imag(inputs)[:, :, None]), axis=2)
         mean = tf.reduce_mean(inputs, axis=1)  # 每一个子载波的均值
@@ -218,15 +218,6 @@ class PRBatchnorm(layers.Layer):
         config = super(PRBatchnorm, self).get_config()
         config.update({'trainable': self.trainable, 'num_fram': self.num_fram})
         return config
-
-
-def set_trainable(prbatchnorm, flag):
-    if flag:
-        prbatchnorm.gama.trainable = True
-        prbatchnorm.beta.trainable = True
-    else:
-        prbatchnorm.gama.trainable = False
-        prbatchnorm.beta.trainable = False
 
 
 if __name__ == "__main__":

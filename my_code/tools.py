@@ -139,6 +139,7 @@ class Saver:
     @classmethod
     def save_model(cls, encoder, decoder, mapper, x_train, x_test,
                    model_save_path: Model_save_path, result_save_path:Result_save_path):
+        root = model_save_path[0].split('/')
         mapper_train_pre = mapper(x_train)
         mapper_test_pre = mapper(x_test)
         decoder_train_pre = decoder(mapper(x_train))
@@ -147,7 +148,7 @@ class Saver:
         sio.savemat(result_save_path.mapper_test_pre, {'mapper_test_result': mapper_test_pre.numpy()})
         sio.savemat(result_save_path.decoder_train_pre, {'decoder_train_result': decoder_train_pre.numpy()})
         sio.savemat(result_save_path.decoder_test_pre, {'decoder_test_result': decoder_test_pre.numpy()})
-        make_dirs(model_save_path, "../my_model8/")
+        make_dirs(model_save_path, root[0]+'/'+root[1]+'/')
         keras.models.save_model(encoder, model_save_path.encoder_save_path)
         keras.models.save_model(decoder, model_save_path.decoder_save_path)
         keras.models.save_model(mapper, model_save_path.mapper_save_path)

@@ -3,6 +3,8 @@ from my_code.model_tools import *
 import matplotlib.pyplot as plt
 from matplotlib.pyplot import scatter
 import tensorflow as tf
+from my_code.end2end_communication_main import gh_path, norm_model_save_path, ofdm_model_save_path, ofdm_papr_model_save_path
+from my_code.end2end_communication_main import ofdm_papr_model_save_path_r, ofdm_conv_model_save_path
 # tf.debugging.set_log_device_placement(True)
 
 
@@ -17,26 +19,16 @@ import tensorflow as tf
 
 
 def validation_one():
-    gh_path = GH_PATH(r'D:\LYJ\AutoEncoder-Based-Communication-System-master\matlab_code\genarateH G\G.mat',
-                      r'D:\LYJ\AutoEncoder-Based-Communication-System-master\matlab_code\genarateH G\H.mat')
     fine_model = Model_save_path(r'../my_trained_model/mlp_ofdm_encoder_5000', r'../my_trained_model/mlp_ofdm_decoder_5000',
                                            r'../my_trained_model/mlp_ofdm_mapper_5000')
-    model_load_path = Model_save_path(r'../my_model8/mlp_encoder', r'../my_model8/mlp_decoder',
-                                      r'../my_model8/mlp_mapper')
-    ofdm_model_load_path = Model_save_path(r'../my_model8/mlp_ofdm_encoder', r'../my_model8/mlp_ofdm_decoder',
-                                           r'../my_model8/mlp_ofdm_mapper')
-    ofdm_papr_model_load_path = Model_save_path(r'../my_model8/mlp_ofdm_papr_encoder',
-                                                r'../my_model8/mlp_ofdm_papr_decoder',
-                                                r'../my_model8/mlp_ofdm_papr_mapper')
-    ofdm_conv_model_save_path = Model_save_path(r'../my_model_conv/ofdm_encoder', r'../my_model_conv/ofdm_decoder',
-                                           r'../my_model_conv/ofdm_mapper')
     g = load_mat(gh_path.g_path)['outputG']
     m, bit_nums, channels = 3, 10000, 2  # 注意bit_nums应该与训练的时候大小一样
     ldpc_encoder = LDPCEncode(g, m, bit_nums)
-    qam_padding_bits_test = ldpc_encoder.encode(model_name='mlp')
+    model_name = 'mlp' #'conv1d'
+    qam_padding_bits_test = ldpc_encoder.encode(model_name=model_name)
     num_syms = qam_padding_bits_test.shape[0]#*qam_padding_bits_test.shape[1]
     ofdm_model = 1
-    encoder, decoder, mapper = model_load(ofdm_papr_model_load_path)
+    encoder, decoder, mapper = model_load(ofdm_conv_model_save_path)
     if ofdm_model:
         ofdm_fft = OFDMDeModulation(num_syms // OFDMParameters.fft_num.value * OFDMParameters.ofdm_syms.value)
     history = {'snr': [], 'ber': [], 'papr': []}
@@ -57,6 +49,7 @@ def validation_one():
         ber = np.sum(np.sum(decision_bits != qam_padding_bits_test_int))/(qam_padding_bits_test.shape[0]*qam_padding_bits_test.shape[1])
         if snr % 5 == 0:
             plt.figure()
+            plt.axes(xlim=(-50,50),ylim=(-50,50))
             scatter(received.numpy()[:, 0], received.numpy()[:, 1])
             plt.show()
         history['snr'].append(snr)

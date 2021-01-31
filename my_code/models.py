@@ -123,6 +123,8 @@ class MLPEncoder(keras.Model):
             self.normalize_layer = PowerNormalize(name='normalize')
         elif constraint == 'amp':
             self.normalize_layer = AmplitudeNormalize(name='normalize')
+        else:
+            self.normalize_layer = layers.BatchNormalization()
 
     def call(self, inputs):
         x = self.encoder_in(inputs)
@@ -163,7 +165,7 @@ class MLPMapper(keras.Model):
         self.constraint = constraint
         self.encoder = MLPEncoder(m, channels, constraint)
         if ofdm_model:
-            self.ofdm_layer = OFDMModulation(input_syms, name='ofdm')
+            self.ofdm_layer = OFDMModulation(input_syms,name='ofdm')
             self.de_ofdm_layer = OFDMDeModulation(ofdm_out_syms, name='deofdm')
         self.noise_layer = MyGaussianNoise(snr=snr, nbps=m, num_syms=input_syms, ofdm_model=ofdm_model,
                                       name='noise_layer')
@@ -229,9 +231,9 @@ class ConvMapper(keras.Model):
         self.constraint = constraint
         ofdm_outshape = num_syms // OFDMParameters.fft_num.value * OFDMParameters.ofdm_syms.value
         self.encoder = Conv1dEncoder(input_dim=input_shape, channels=2)
-        self.ofdm_ifft = OFDMModulation(num_syms)
+        self.ofdm_layer = OFDMModulation(num_syms)
         self.noise_layer = MyGaussianNoise(snr=snr, ofdm_model=ofdm_model, num_syms=num_syms, nbps=m)
-        self.ofdm_fft = OFDMDeModulation(ofdm_outshape)
+        self.de_ofdm_layer = OFDMDeModulation(ofdm_outshape)
         if constraint == 'pow':
             self.__normalize_layer = PowerNormalize(name='normalize')
         elif constraint == 'amp':
@@ -242,10 +244,10 @@ class ConvMapper(keras.Model):
         if self.constraint is not 'none':
             encoded = self.__normalize_layer(encoded)
         if self.ofdm_model:
-            encoded = self.ofdm_ifft(encoded)
+            encoded = self.ofdm_layer(encoded)
         out = self.noise_layer(encoded)
         if self.ofdm_model:
-            out = self.ofdm_fft(out)
+            out = self.de_ofdm_layer(out)
         return out
 
     def get_config(self):
@@ -267,6 +269,9 @@ class Conv1dAE(keras.Model):
 
     def call(self, inputs):
         return self.decoder(self.mapper(inputs))
+
+
+
 
 
 def main():
