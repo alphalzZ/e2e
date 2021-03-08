@@ -46,7 +46,7 @@ class Train:
         if reset_regular_factor:
             self.regularization_factor = [tf.Variable(1., trainable=factor_trainable),
                                           tf.Variable(1., trainable=factor_trainable),
-                                          tf.Variable(0.001, trainable=factor_trainable)]
+                                          tf.Variable(0.05, trainable=factor_trainable)]
         if ofdm_model:
             if model_name == 'mlp' or model_name == 'attention':
                 self.papr_loss = PAPRConstraint(num_syms=data[0].shape[0], snr=snr)
@@ -91,14 +91,17 @@ class Train:
             ofdm_signal = mapper.ofdm_layer(mapping)
             binary_loss = self.prime_loss(y_train, prediction)
             mapping_loss = self.mapping_loss(mapping, mapping)
-            current_loss = 1 / (2 * self.regularization_factor[0] ** 2) * binary_loss + \
-                           1 / (2 * self.regularization_factor[1] ** 2) * mapping_loss + \
-                           tf.math.log(reduce(lambda x, y: x * y ** 2, self.regularization_factor[:-1]))
+            # current_loss = 1 / (2 * self.regularization_factor[0] ** 2) * binary_loss + \
+            #                1 / (2 * self.regularization_factor[1] ** 2) * mapping_loss + \
+            #                tf.math.log(reduce(lambda x, y: x * y ** 2, self.regularization_factor[:-1]))
+            current_loss = self.regularization_factor[0] * binary_loss \
+                           + self.regularization_factor[1] * mapping_loss
             papr_loss = self.papr_loss(ofdm_signal, ofdm_signal)  #
             train_papr = papr_loss.numpy()
             if self.ofdm_model and self.train_union:  # ofdm训练ber
-                current_loss = current_loss + 1 / (2 * self.regularization_factor[-1] ** 2) * papr_loss + \
-                    tf.math.log(self.regularization_factor[-1]**2)
+                # current_loss = current_loss + 1 / (2 * self.regularization_factor[-1] ** 2) * papr_loss + \
+                #     tf.math.log(self.regularization_factor[-1]**2)
+                current_loss = current_loss + self.regularization_factor[-1] * papr_loss
             train_loss = self.binary_cross_entropy_metrics(y_train, prediction).numpy()
             train_accuracy = self.binary_accuracy_metrics(y_train, prediction).numpy()
         trainable_variables = [mapper.trainable_variables, decoder.trainable_variables]
@@ -134,7 +137,7 @@ def main():
                                            r'../my_model_conv/ofdm_mapper')
     ofdm_atten_model_save_path = Model_save_path(r'../my_model_atten/ofdm_encoder', r'../my_model_atten/ofdm_decoder',
                                                 r'../my_model_atten/ofdm_mapper')
-    model_name = 'attention'  # conv1d or mlp or attention
+    model_name = 'mlp'  # conv1d or mlp or attention
     ldpc_encoder = LDPCEncode(g, m, bit_nums)
     qam_padding_bits = ldpc_encoder.encode(model_name=model_name)  # 随机比特流数据作为训练数据
     qam_padding_bits_val = ldpc_encoder.encode(model_name=model_name)  # 生成验证数据
@@ -148,8 +151,8 @@ def main():
     continued, ofdm_model, train_union = 1, 1, 1  # ofdm 模式下需要先训练ber，再训练papr（0,1,0）-->（1,1,1）
     factor_trainable = 0
     constraint, mapping_method = 'pow', 'pow'  # constraint: amp,pow; mapping_method: papr, none, pow
-    model_load_path = ofdm_atten_model_save_path
-    model_save_path = ofdm_atten_model_save_path
+    model_load_path = ofdm_papr_model_save_path
+    model_save_path = ofdm_papr_model_save_path
     if continued:
         encoder, decoder, mapper = model_load(model_path=model_load_path)
         if train_union:  # 如果过度拟合decoder的话整体性能将会下降
@@ -166,7 +169,8 @@ def main():
                                                input_shape=input_shape,
                                                ofdm_outshape=num_signals // OFDMParameters.fft_num.value * OFDMParameters.ofdm_syms.value)
     T = Train(data=data_set, lr=0.001, snr=snr_ebn0, m=m, train_union=train_union, factor_trainable=factor_trainable,
-              mapping_method=mapping_method, continued=continued, ofdm_model=ofdm_model, model_name=model_name, reset_regular_factor=1)  # papr_method:none\pow\papr
+              mapping_method=mapping_method, continued=continued, ofdm_model=ofdm_model, model_name=model_name,
+              opt='adam', reset_regular_factor=1)  # papr_method:none\pow\papr
     history = T.train_loop(epochs=epochs, decoder=decoder, mapper=mapper)
     encoder = mapper.encoder
     Saver.save_model(encoder, decoder, mapper, data_set.train_data, qam_padding_bits_test,
@@ -181,5 +185,5 @@ if __name__ == "__main__":
     # TODO：
     #  1.优化papr
     #  2.papr的自适应MTL表达式
-    with tf.device('/GPU:0'):
+    with tf.device('/CPU:0'):
         main()

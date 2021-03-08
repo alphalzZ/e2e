@@ -1,0 +1,33 @@
+1. 训练到一定程度之后encoder就不会提升了，继续训练主要是decoder对训练数据的过拟合，表现为：
+    a.在对应的SNR下表现很好，不能泛化到其它SNR；
+
+待选解决方案：
+    a.对decoder增加正则化
+    b.训练papr的时候固定decoder权重，只对encoder进行训练，让encoder去拟合decoder
+        衍生方案：设计一种decoder，只训练encoder来拟合encoder
+
+2.papr很高的问题：
+    a.计算方式有误？
+    b.映射不好
+    c.约束项不起作用
+    参考文献：A Novel PAPR Reduction Scheme for OFDM System based on Deep Learning
+    可能原因：经过ifft之后进行梯度计算反过来更新模型效果不佳
+    拟解决方案：1.将约束前移，推导经过encoder的papr约束公式
+                2.将约束放到ifft之后进行，考虑对每一个子载波进行约束。
+
+
+
+待选解决方案：
+    a.设计mapping
+    b.设计约束
+    c.对encoder输出做幅度限制
+
+如何设计指定输出？
+    encoder映射到指定个数的输出
+
+卷积模型实现一次训练各种调制阶数都可以使用？
+
+最新：
+    单独训练ber和papr都可以降下来，如何联合优化？
+    先训练一个，固定权重，接着训练另一个？
+    先训练一个，减小另一个的损失系数，共同训练？

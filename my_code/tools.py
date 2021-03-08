@@ -55,6 +55,10 @@ def plot(hist:History, start):
     plt.plot(hist.epoch[start:], hist.papr[start:], label="papr")
     plt.plot(hist.epoch[start:], hist.val_papr[start:], label="val_papr")
     plt.legend()
+    plt.figure()
+    plt.plot(hist.epoch[start:], hist.accuracy[start:], label="acc")
+    plt.plot(hist.epoch[start:], hist.val_accuracy[start:], label="val_acc")
+    plt.legend()
     plt.show()
 
 
@@ -110,7 +114,6 @@ class LDPCEncode:
             return data.reshape(-1, self.__g.shape[1])
         if model_name == 'conv1d':
             pass
-
 
     def __bits_process(self, bits: np.ndarray):
         length = bits.shape[0]

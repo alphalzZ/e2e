@@ -1,7 +1,14 @@
 import numpy as np
 from tensorflow import keras
 from tensorflow.keras import layers
+from keras.layers import Activation
 from my_code.model_tools import *
+from keras.utils.generic_utils import get_custom_objects
+
+
+
+get_custom_objects().update({'clipping_functions': Activation(clipping_functions)})
+get_custom_objects().update({'clipping': Activation(clipping)})
 
 
 class Models:
@@ -118,9 +125,10 @@ class MLPEncoder(keras.Model):
         super(MLPEncoder, self).__init__()
         self.constraint = constraint
         self.encoder_in = layers.InputLayer(input_shape=(m,))
-        self.encoder_layers = [layers.Dense(2 ** i, activation='elu') for i in range(4 if m < 4 else m, 1, -1)]
-        self.batchnorms = [layers.BatchNormalization() for _ in range(4 if m < 4 else m, 1, -1)]
-        self.encoder_out = layers.Dense(channels, activation='elu', name='encoder_out')
+        self.encoder_layers = [layers.Dense(2 ** i, activation='elu') for i in range(2,6)]
+        # self.batchnorms = [layers.BatchNormalization() for _ in range(5)]
+        self.batchnorms = [PRBatchnorm_2() for _ in range(5)]
+        self.encoder_out = layers.Dense(channels, activation='tanh', name='encoder_out')
         if constraint == 'pow':
             self.normalize_layer = PowerNormalize(name='normalize')
         elif constraint == 'amp':
@@ -146,8 +154,9 @@ class MLPDecoder(keras.Model):
     def __init__(self, m, channels):
         super(MLPDecoder, self).__init__()
         self.decoder_in = layers.InputLayer(input_shape=(channels,))
-        self.decoder_layers = [layers.Dense(2 ** i, activation='elu') for i in range(2, 4 if m < 4 else m + 1, 1)]
-        self.batchnorms = [layers.BatchNormalization() for _ in range(2, 4 if m < 4 else m + 1, 1)]
+        self.decoder_layers = [layers.Dense(2 ** i, activation='elu') for i in range(5, 1, -1)]
+        # self.batchnorms = [layers.BatchNormalization() for _ in range(5)]
+        self.batchnorms = [PRBatchnorm_2() for _ in range(5)]
         self.decoder_out = layers.Dense(m, activation='sigmoid')
 
     def call(self, inputs):
@@ -276,9 +285,9 @@ class AttentionEncoder(keras.Model):
         super(AttentionEncoder, self).__init__()
         self.constraint = constraint
         self.Input = layers.InputLayer(input_shape=(m,))
-        self.up_sample = layers.Dense(6, activation='elu', input_shape=())
+        self.up_sample = layers.Dense(128, activation='elu', input_shape=())
         self.up_attention = SelfAttention()
-        self.down_sample = layers.Dense(4, activation='elu')
+        self.down_sample = layers.Dense(128, activation='elu')
         self.down_attention = SelfAttention()
         self.out = layers.Dense(channel, activation='sigmoid')
         if constraint == 'pow':
@@ -308,9 +317,9 @@ class AttentionDecoder(keras.Model):
         super(AttentionDecoder, self).__init__()
         self.Input = keras.layers.InputLayer(input_shape=(channels,))
         self.down_attention = SelfAttention()
-        self.up_sample = layers.Dense(4, activation='elu')
+        self.up_sample = layers.Dense(128, activation='elu')
         self.up_attention = SelfAttention()
-        self.down_sample = layers.Dense(6, activation='elu')
+        self.down_sample = layers.Dense(128, activation='elu')
         self.out = layers.Dense(m, activation='sigmoid')
 
     def call(self, inputs):

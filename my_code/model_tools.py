@@ -1,6 +1,7 @@
 
 import numpy as np
 import tensorflow as tf
+from tensorflow import keras
 from tensorflow.python.keras import backend as K
 from tensorflow.python.ops import array_ops
 from tensorflow.keras import layers, losses, metrics
@@ -46,12 +47,12 @@ class PAPRConstraint(losses.Loss):
         ofdm_signal_iq = self.__noise_layer(y_pred)
         ofdm_signal_complex = tf.complex(ofdm_signal_iq[:, 0], ofdm_signal_iq[:, 1])
         ofdm_signal = tf.reshape(ofdm_signal_complex, ofdm_shape)
-        signal_power = tf.square(tf.math.real(tf.multiply(ofdm_signal, tf.math.conj(ofdm_signal))))
-        mean_pow = tf.reduce_mean(signal_power, axis=1)
-        max_pow = tf.reduce_max(signal_power, axis=1)
-        papr_vector = max_pow / mean_pow
+        power = tf.math.abs(ofdm_signal)**2
+        mean_power = tf.reduce_mean(power, axis=1)
+        max_power = tf.reduce_max(power, axis=1)
+        papr_vector = max_power / mean_power
         papr = tf.reduce_mean(papr_vector)
-        papr_log = 10*tf.math.log(papr)
+        papr_log = 10*tf.experimental.numpy.log10(papr)
         return papr_log
 
 
@@ -152,17 +153,18 @@ class MyGaussianNoise(layers.Layer):
 
 
 class OFDMModulation(layers.Layer):
-    def __init__(self, num_sym, num_gard=OFDMParameters.guard_interval.value,
+    def __init__(self, num_syms, num_gard=OFDMParameters.guard_interval.value,
                  num_fft=OFDMParameters.fft_num.value, **kwargs):
         """保护间隔个数， fft个数， 每一帧ofdm符号个数等于num_gard+num_fft， 帧数等于符号个数除以num_fft"""
         #  TODO 子载波个数 <= ifft点数
         super(OFDMModulation, self).__init__(**kwargs)
         self.num_gard, self.num_fft = num_gard, num_fft
-        self.num_sym = num_sym
-        self.prbatchnorm = PRBatchnorm(True, num_sym//num_fft)
+        self.num_syms = num_syms
+        self.prbatchnorm = PRBatchnorm(True, num_syms//num_fft)
+        # self.prbatchnorm = AttentionBatchnorm()
 
     def call(self, inputs):  # (num_symbols, 2)
-        num_fram = self.num_sym//self.num_fft
+        num_fram = self.num_syms//self.num_fft
         X = tf.complex(inputs[:, 0], inputs[:, 1])
         X = tf.reshape(X[:, None], [num_fram, -1])
         x = tf.signal.ifft(X)
@@ -174,7 +176,7 @@ class OFDMModulation(layers.Layer):
 
     def get_config(self):
         config = super(OFDMModulation, self).get_config()
-        config.update({'num_gard':self.num_gard, 'num_fft': self.num_fft, 'num_sym':self.num_sym})
+        config.update({'num_gard':self.num_gard, 'num_fft': self.num_fft, 'num_syms':self.num_syms})
         return config
 
 
@@ -186,11 +188,13 @@ class OFDMDeModulation(layers.Layer):
         self.num_gard, self.num_fft = num_gard, num_fft
         self.num_sym = num_gard + num_fft
         self.ofdm_outshape = ofdm_outshape
+        self.prbatchnorm = PRBatchnorm(True, ofdm_outshape // self.num_sym)
 
     def call(self, inputs):
         num_fram = self.ofdm_outshape // self.num_sym
         Y = tf.complex(inputs[:, 0], inputs[:, 1])
         Y = tf.reshape(Y, (num_fram, -1))
+        Y = self.prbatchnorm(Y)
         y = tf.signal.fft(Y[:, self.num_gard:self.num_sym])
         y = tf.reshape(y, (-1, 1))
         outputs = tf.concat((tf.math.real(y), tf.math.imag(y)), axis=1)
@@ -229,15 +233,25 @@ class PRBatchnorm(layers.Layer):
         """原文中是两个标量, 此处是每一个子载波对应一个缩放因子"""
         shape = (self.num_fram, 1, 2)
         self.gama = tf.Variable(
-            initial_value=tf.random.normal(shape, mean=0.1, stddev=0.001),
+            initial_value=tf.random.normal(shape, mean=1, stddev=0.001),
             trainable=self.trainable,
             name='gama'
         )
         self.beta = tf.Variable(
-            initial_value=0.001*tf.random.normal(shape, stddev=0.01),
+            initial_value=0.001*tf.random.normal(shape, stddev=0.001),
             trainable=self.trainable,
             name='beta'
         )
+        # self.gama = tf.Variable(
+        #     initial_value=tf.random.normal((1, 1), mean=1, stddev=0.001),
+        #     trainable=self.trainable,
+        #     name='gama'
+        # )
+        # self.beta = tf.Variable(
+        #     initial_value=0.001 * tf.random.normal((1, 1), stddev=0.001),
+        #     trainable=self.trainable,
+        #     name='beta'
+        # )
 
     def call(self, inputs, training=None):
         """inputs:复信号，（num_fram, num_syms）"""
@@ -252,6 +266,67 @@ class PRBatchnorm(layers.Layer):
         config = super(PRBatchnorm, self).get_config()
         config.update({'trainable': self.trainable, 'num_fram': self.num_fram})
         return config
+
+
+class PRBatchnorm_2(layers.Layer):
+    def __init__(self, trainable=True, **kwargs):
+        super(PRBatchnorm_2, self).__init__(**kwargs)
+        self.trainable = trainable
+
+    def build(self, input_shape):
+        """原文中是两个标量, 此处是每一个子载波对应一个缩放因子"""
+        self.gama = tf.Variable(
+            initial_value=tf.random.normal((1, 1), mean=0.1, stddev=0.001),
+            trainable=self.trainable,
+            name='gama'
+        )
+        self.beta = tf.Variable(
+            initial_value=0.001 * tf.random.normal((1, 1), stddev=0.01),
+            trainable=self.trainable,
+            name='beta'
+        )
+
+    def call(self, inputs, training=None):
+        """inputs:复信号，（num_signals, m）"""
+        mean = tf.reduce_mean(inputs, axis=0)
+        inputs = tf.subtract(inputs, mean[None, :])
+        sigma = tf.math.reduce_variance(inputs, axis=0)
+        x = tf.add(tf.multiply(self.gama, inputs) / tf.sqrt(tf.add(sigma[None, :], tf.constant(0.001))), self.beta)
+        return x
+
+    def get_config(self):
+        config = super(PRBatchnorm_2, self).get_config()
+        config.update({'trainable': self.trainable})
+        return config
+
+
+class AttentionBatchnorm(layers.Layer):
+    def __init__(self, **kwargs):
+        super(AttentionBatchnorm, self).__init__(**kwargs)
+        self.attention = SelfAttention()
+
+    def call(self, inputs, training=None):
+        """inputs:复信号，（num_fram, num_syms）"""
+        inputs = tf.concat((tf.math.real(inputs)[:, :, None], tf.math.imag(inputs)[:, :, None]), axis=2)
+        out = []
+        for i in range(inputs.shape[0]):
+            out.append(self.attention(inputs[i, :, :]))
+        out = tf.convert_to_tensor(out)
+        return tf.complex(out[:, :, 0], out[:, :, 1])
+
+
+def clipping_functions(x):
+    return 0.1*keras.activations.relu(x+5)-0.1*keras.activations.relu(x-5)
+
+
+def clipping(x):
+    sigma = tf.math.sqrt(tf.math.reduce_mean(tf.math.square(tf.math.abs(x))))
+    CL = 0.3*sigma
+    x_clipped = x
+    clipped_idx = tf.cast(tf.math.abs(x_clipped) > CL, tf.float32)
+    z = x_clipped*clipped_idx
+    z = tf.math.divide((z*CL), tf.math.abs(z)+1e-4)
+    return z
 
 
 if __name__ == "__main__":
@@ -275,6 +350,6 @@ if __name__ == "__main__":
     ofdm_out = ofdm(mapping_pre)
     deofdm = OFDMDeModulation(ofdm_outshape=512//256*288)
     deofdm_out = deofdm(ofdm_out)
-    papr_constraint = PAPRConstraint(128, 23)
+    papr_constraint = PAPRConstraint(512, 23)
     out4 = papr_constraint(mapping_pre, mapping_pre)
     print("finish!")
